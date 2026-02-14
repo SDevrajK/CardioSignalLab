@@ -1,0 +1,136 @@
+
+
+
+Hi everyone, I've been trying to implement a pyQtPlot in a UI-based application. But somehow I've run out of luck and ideas. I simply can't display (or at least see) any data in my pqQtPlot. This isn't because data is missing or not being plotted in the chart. The chart simply doesn't display any lines or data points. I know that my data is reaching the graphics widget because the widget itself can export the correct data to a CSV file, which I can read directly or display in a spreadsheet. Does anyone here have any idea why this isn't working?
+
+I tried different colors, line stiles and data point markers but nothing worked, so I left it as simple as follows for this post.
+
+I broke the Problem down to the following UI Example (which also doesn't plot anything but the Graph UI):
+
+# test_app.py
+import sys
+from PySide6.QtWidgets import QApplication
+import pyqtgraph as pg
+
+uiclass, baseclass = pg.Qt.loadUiType("test_pyqtplot.ui")
+
+class MainWindow(uiclass, baseclass):
+    def __init__(self):
+        super().__init__()
+        self.setupUi(self)
+        self.update_plot(   [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # xAxisValues
+                            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])  # yAxisValues
+    
+    def update_plot(self, xAxis, yAxis):
+        x_range = len(xAxis)
+        y_range = len(yAxis)
+        self.graphWidget.setBackground('w')                 # White Background
+        self.graphWidget.setXRange(0, x_range, padding=0)   # Scaling X/Y to data length
+        self.graphWidget.setYRange(0, y_range, padding=0)   # This works (!)
+        self.graphWidget.plot( xAxis,
+                               yAxis,
+                               symbol='o',
+                               symbolBrush='r',
+                               symbolPen='r',
+                               symbolSize=6)
+
+app = QApplication(sys.argv)
+window = MainWindow()
+window.show()
+app.exec()
+
+It would expect an output of a very simple plot with a diagonal line:
+
+10 |                  *
+ 9 |                *
+ 8 |              *
+ 7 |            *
+ 6 |          *
+ 5 |        *
+ 4 |      *
+ 3 |    *
+ 2 |  *
+ 1 |*
+   +---------------------
+    1 2 3 4 5 6 7 8 9 10
+
+But nothing is printed into the plot. No line, no data point. But if you right click and export as CSV, the data appears correct.
+
+The XML code of my UI is as follows:
+
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1195</width>
+    <height>837</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>MainWindow</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <widget class="PlotWidget" name="graphWidget" native="true">
+    <property name="geometry">
+     <rect>
+      <x>49</x>
+      <y>29</y>
+      <width>1081</width>
+      <height>741</height>
+     </rect>
+    </property>
+   </widget>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1195</width>
+     <height>22</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>PlotWidget</class>
+   <extends>QWidget</extends>
+   <header>pyqtgraph</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>
+
+Versions Used:
+
+    python 3.10.12 (as given by Ubuntu Version 22.04)
+
+    numpy 2.2.6
+
+    PySide6 6.9.1 (including PySide_Addons and Essentials)
+
+    pyqtgraph 0.13.7
+
+    shiboken6 6.9.1
+
+
+
+===*a few days later*===
+
+Hi everyone. I've just solved my problem for now and wanted to let you know what the real problem was.
+
+It's actually a version problem with pyside6 (v6.9.1) and/or pyQtGraph (0.13.7). After I found that my test application runs smoothly with pyQt5, I was relatively confident that the problem was not in my code.
+
+So I searched the GitHub repositories of PySide6 and PyQtGraph and combed through the issue reports. I came across a thread that I had already seen a few days ago, which said that there is currently a problem with automatic axis scaling in PyQtGraph and PySide6 (6.9.1). However, this was not a problem for me, as I always scale my axes to the content of my arrays. Just in the comments on this report, someone described the same problem I was having. His graphs were not being displayed, and he wrote that this issue came up with pySide6 version 6.9.1 - gasp
+
+I jumped to my PC, rolled back to pySide6 version 6.9.0 (via pip install -Iv pyside6==6.9.0) and everything worked right out of the box.
+
+What did I learn from that? If you find a problem report for a library you are using, read the comments :-) It probably takes less time to read all the comments on a problem report than to waste three days on a problem that is not actually on your side of coding.

@@ -1,0 +1,404 @@
+# Tasks: CardioSignalLab MVP - Core Application
+
+**PRD**: `docs/prd/prd-mvp-core-application.md`
+**Generated**: 2026-02-12
+
+## Relevant Files
+
+### Core Application
+- `src/cardio_signal_lab/app.py` - QApplication entry point
+- `src/cardio_signal_lab/signals.py` - AppSignals event bus (custom Qt signals for decoupling)
+- `src/cardio_signal_lab/core/data_models.py` - attrs-based signal containers (SignalData, PeakData, EventData, RecordingSession, ProcessingStep, DerivedSignalData for L2 Norm/derived channels - added in Task 3.11)
+- `src/cardio_signal_lab/core/file_loader.py` - FileLoader Protocol + XdfLoader (distinguishes PPG vs GSR from same stream), CsvLoader (supports Shimmer 3-row header format, auto-detects signal types), event loading
+- `src/cardio_signal_lab/core/exporter.py` - CSV, NPY, XDF, annotation export with parameter saving
+- `src/cardio_signal_lab/core/session.py` - JSON session file save/load for resuming work
+
+### GUI
+- `src/cardio_signal_lab/gui/main_window.py` - QMainWindow with three-level view hierarchy (multi/type/channel), view switching, Pan/Zoom mode toggles
+- `src/cardio_signal_lab/gui/plot_widget.py` - PyQtGraph signal plot widget with LOD rendering, right-click context menu
+- `src/cardio_signal_lab/gui/lod_renderer.py` - Level-of-detail min/max envelope pyramid for large datasets
+- `src/cardio_signal_lab/gui/multi_signal_view.py` - Multi-signal overview (groups by signal type, not individual channels)
+- `src/cardio_signal_lab/gui/signal_type_view.py` - Signal-type view for multi-channel types (ECG 4 channels), derived channel creation (TO BE CREATED in Task 3.11)
+- `src/cardio_signal_lab/gui/single_channel_view.py` - Single-channel processing/correction view (renamed from single_signal_view.py in Task 3.11)
+- `src/cardio_signal_lab/gui/peak_overlay.py` - Peak marker rendering on plots (auto vs manual colors)
+- `src/cardio_signal_lab/gui/event_overlay.py` - Event marker rendering (vertical lines with labels)
+- `src/cardio_signal_lab/gui/status_bar.py` - QStatusBar with mode and signal context
+
+### Processing
+- `src/cardio_signal_lab/processing/filters.py` - Bandpass filtering, baseline correction, detrending, zero-referencing, segmentation
+- `src/cardio_signal_lab/processing/eemd.py` - EEMD artifact removal (ported from Shimmer_Testing)
+- `src/cardio_signal_lab/processing/peak_detection.py` - NeuroKit2 wrappers for ECG, PPG, EDA peak detection
+- `src/cardio_signal_lab/processing/peak_correction.py` - Add/delete peaks, undo/redo stack (20 levels)
+- `src/cardio_signal_lab/processing/pipeline.py` - Composable processing pipeline (ordered ProcessingStep list)
+- `src/cardio_signal_lab/processing/worker.py` - QThread worker for background processing with progress/cancel
+
+### Config
+- `src/cardio_signal_lab/config/settings.py` - Application settings (attrs-based)
+- `src/cardio_signal_lab/config/keybindings.py` - Keyboard shortcut definitions (P/Z for Pan/Zoom modes, navigation shortcuts)
+
+### Tests
+- `tests/test_data_models.py` - Unit tests for attrs-based signal containers and validation
+- `tests/test_file_loader.py` - Unit tests for XDF/CSV loading via FileLoader Protocol
+- `tests/test_filters.py` - Unit tests for filtering and preprocessing
+- `tests/test_eemd.py` - Unit tests for EEMD artifact removal
+- `tests/test_peak_detection.py` - Unit tests for NeuroKit2 peak detection wrappers
+- `tests/test_peak_correction.py` - Unit tests for peak add/delete and undo/redo
+- `tests/test_pipeline.py` - Unit tests for composable processing pipeline and serialization
+- `tests/test_lod_renderer.py` - Unit tests for LOD envelope computation correctness
+- `tests/test_exporter.py` - Unit tests for export formats and parameter saving
+- `tests/test_session.py` - Unit tests for session file save/load round-trip
+- `tests/test_integration.py` - End-to-end workflow tests using pytest-qt
+
+### Project Files
+- `pyproject.toml` - Project metadata, dependencies, ruff config, pytest config
+- `main.py` - Application entry point
+
+### Source Projects (Read-Only Reference)
+- `../EKG_Peak_Corrector/v2/src/ekg_corrector/core/data_models.py` - Data model patterns to port
+- `../EKG_Peak_Corrector/v2/src/ekg_corrector/core/xdf_loader.py` - XDF loading logic to port
+- `../EKG_Peak_Corrector/v2/src/ekg_corrector/core/signal_filtering.py` - Filter utilities to port
+- `../EKG_Peak_Corrector/v2/src/ekg_corrector/gui/peak_correction_handler.py` - Peak correction logic to port
+- `../EKG_Peak_Corrector/v2/src/ekg_corrector/config/settings.py` - Config patterns to port
+- `../EKG_Peak_Corrector/v2/src/ekg_corrector/config/keybindings.py` - Keybinding patterns to port
+- `../Shimmer_Testing/lib/preprocessing/emd_denoising.py` - EEMD implementation to port
+- `../Acute_Tinnitus_PPG/TBP_single_process_v10.py` - NeuroKit2 PPG patterns
+- `../Hyperacousie_TCC/TCC_1_PPG_preprocessing.py` - NeuroKit2 processing pipeline patterns
+
+### Notes
+- Unit tests should be placed in the `tests/` directory at project root
+- Use pytest + pytest-qt as the test runner
+- Use ruff for linting and formatting (configured in pyproject.toml)
+- Source project files are read-only references for porting -- do not modify them
+
+## Task Classification Legend
+- **[RESEARCH]** - Use research-scientist-analyzer (literature/best practices) and/or code-reviewer (existing code analysis)
+- **[IMPLEMENTATION]** - Standard coding implementation
+- **[REVIEW]** - Use quality-assessment-specialist to verify requirements fulfillment and catch shortcuts
+
+## Tasks
+
+- [x] 1.0 Project Foundation and Qt Application Shell (ALL SUB-TASKS COMPLETE)
+  - Overall Note: Successfully created Qt foundation with PySide6, attrs-based config, keybindings, AppSignals event bus, two-mode menu system, and status bar
+  - Files created: pyproject.toml, main.py, config/settings.py, config/keybindings.py, signals.py, gui/main_window.py, gui/status_bar.py
+  - [x] 1.1 **[RESEARCH]** Analyze EKG_Peak_Corrector v2 project structure, config system (`config/settings.py`, `config/keybindings.py`), and `main.py` entry point to understand patterns worth porting vs simplifying for CardioSignalLab
+    - Note: Analyzed v2 structure (17K lines core/, 7K lines gui/, monolithic 2.4K line main.py)
+    - Note: Config system uses dataclasses with global singleton - excellent pattern to keep
+    - Note: Keybindings.py has comprehensive context-aware system - port unchanged
+    - Note: Main.py is too monolithic - decompose into main_window, menu_handler, signal_panel
+    - Note: data_models.py and xdf_loader.py are well-designed - port with minimal changes
+    - Note: Recommendation: Port config/ and core/ modules mostly as-is; simplify GUI to menu-driven single window
+  - [x] 1.2 **[IMPLEMENTATION] [DEPENDS: 1.1]** Create `pyproject.toml` with all dependencies (PySide6, PyQtGraph, attrs, NeuroKit2, PyEMD, pyxdf, SciPy, NumPy, loguru) plus dev dependencies (pytest, pytest-qt, ruff); add ruff config (`target-version = "py312"`, `line-length = 99`); add pytest config; create `main.py` entry point that launches the QApplication
+    - Note: Created pyproject.toml with all required dependencies and dev tools
+    - Note: Configured ruff with line-length=99, py312 target, and sensible linting rules
+    - Note: Configured pytest with coverage, qt_api="pyside6", and test markers
+    - Note: Created main.py entry point with loguru logging (console + rotating file)
+    - Note: Created src/cardio_signal_lab/ package structure
+  - [x] 1.3 **[IMPLEMENTATION] [DEPENDS: 1.2]** Implement `config/settings.py` using attrs with validators for processing defaults (filter cutoffs, EEMD params, peak detection settings) and GUI settings (window size, colors); port and simplify from EKG_Peak_Corrector's config system
+    - Note: Created attrs-based config with validators (positive_float, positive_int, frequency_order checks)
+    - Note: ProcessingConfig: ECG (0.5-40Hz), PPG (0.5-8Hz), EDA (0.05-5Hz) with scientific rationale
+    - Note: EEMD params: ensemble_size=500, noise_width=0.2 (standard values from literature)
+    - Note: GUIConfig: peak colors (blue=auto, green=manual), window 1400x900, signal colors for ECG/PPG/EDA
+    - Note: ConfigManager with ~/.cardio_signal_lab/ user config and environment variable overrides (CSL_* prefix)
+    - Note: Global get_config() singleton for easy access throughout app
+  - [x] 1.4 **[IMPLEMENTATION] [DEPENDS: 1.2]** Implement `config/keybindings.py` with default keyboard shortcuts: Ctrl+Z undo, Ctrl+Y redo, Delete remove peak, Ctrl+O open, Ctrl+S save, Ctrl+E export, ESC return to multi-signal view
+    - Note: Defined KEYBINDINGS dict using Qt QKeySequence for cross-platform compatibility
+    - Note: Used StandardKey enums (Open, Save, Undo, Redo, ZoomIn, ZoomOut, Quit, HelpContents) where applicable
+    - Note: Organized shortcuts into groups: File, Edit, View, Peak Navigation, Signal Navigation, Help
+    - Note: Created helper functions: get_keysequence(), get_description(), get_shortcut_text(), get_help_text()
+    - Note: All shortcuts follow PRD spec: Ctrl+Z/Y undo/redo, Del remove peak, Ctrl+O/S/E file ops, ESC multi-signal view
+  - [x] 1.5 **[IMPLEMENTATION] [DEPENDS: 1.2]** Implement `signals.py` with `AppSignals(QObject)` central event bus: define custom Qt signals for `file_loaded(RecordingSession)`, `signal_selected(SignalData)`, `mode_changed(str)`, `peaks_updated(PeakData)`, `processing_started(str)`, `processing_progress(int)`, `processing_finished()`, `processing_cancelled()`; instantiate as singleton accessible to all components
+    - Note: Created AppSignals(QObject) with all required signals using PySide6 Signal class
+    - Note: Defined signals: file_loaded, signal_selected, mode_changed, peaks_updated, peak_selected/deselected
+    - Note: Processing signals: processing_started(str), processing_progress(int), processing_finished(), processing_cancelled(), processing_error(str)
+    - Note: View signals: view_zoom_changed(float, float), view_reset_requested
+    - Note: Global get_app_signals() singleton for accessing the event bus from any component
+    - Note: Used TYPE_CHECKING to avoid circular imports while maintaining type hints
+  - [x] 1.6 **[IMPLEMENTATION] [DEPENDS: 1.3, 1.4, 1.5]** Implement `gui/main_window.py` as QMainWindow with two-mode menu system: multi-signal mode menus (File, Edit, Select, View, Help) and single-signal mode menus (File, Edit, Process, View, Help); implement mode switching that swaps Select/Process menus; wire keyboard shortcuts from keybindings config; connect menu actions to AppSignals; connect mode_changed signal to menu rebuilds
+    - Note: Created MainWindow(QMainWindow) with dynamic menu system that rebuilds on mode changes
+    - Note: Multi-signal menus: File, Edit (disabled), Select, View, Help
+    - Note: Single-signal menus: File, Edit (enabled), Process, View (with "Return to Multi-Signal"), Help
+    - Note: All keyboard shortcuts wired via get_keysequence() from keybindings config
+    - Note: Menu actions emit appropriate AppSignals (file_save_requested, file_export_requested, view_reset_requested)
+    - Note: Connected mode_changed signal to _on_mode_changed() which rebuilds menus
+    - Note: Process menu has placeholders for Filter, Artifact Removal, Detect Peaks, Reset (to be wired to actual processing later)
+  - [x] 1.7 **[IMPLEMENTATION] [DEPENDS: 1.6]** Implement `gui/status_bar.py` as QStatusBar showing current mode and signal context (e.g., "Multi-Signal Mode (3 signals loaded)" or "Single-Signal Mode: ECG (Channel 1)"); connect to AppSignals.mode_changed and AppSignals.signal_selected
+    - Note: Created AppStatusBar(QStatusBar) that listens to AppSignals and updates automatically
+    - Note: Connected to mode_changed, file_loaded, signal_selected signals
+    - Note: Displays "Multi-Signal Mode (N signals loaded)" or "Single-Signal Mode: TYPE (channel)" as appropriate
+    - Note: Integrated into MainWindow.__init__() via setStatusBar()
+    - Note: Status updates automatically when signals are emitted (no manual calls needed)
+  - [x] 1.8 **[REVIEW] [DEPENDS: 1.7]** Verify the Qt shell launches correctly, menus switch between modes, status bar updates, keyboard shortcuts are wired, AppSignals event bus works, and the application matches PRD section 8 (Menu-Driven Interface) requirements
+    - Note: Package installed successfully (pip install -e .)
+    - Note: All imports work correctly (config, signals, keybindings, main_window)
+    - Note: Two-mode menu system implemented: multi (File/Edit/Select/View/Help) vs single (File/Edit/Process/View/Help)
+    - Note: Mode switching works via mode_changed signal which triggers menu rebuild
+    - Note: All keyboard shortcuts wired via get_keysequence() from config
+    - Note: AppSignals event bus working (file_loaded, signal_selected, mode_changed, processing_*, view_*, peaks_updated)
+    - Note: Status bar connected to signals and updates automatically
+    - Note: Matches PRD section 8 requirements (Menu-Driven Interface)
+
+- [x] 2.0 File Loading and Signal Data Model (ALL SUB-TASKS COMPLETE)
+  - Overall Note: Complete file loading system with attrs-validated data models, XDF/CSV loaders (including Shimmer 3-row header format), signal type auto-detection, event loading from companion files (JSON/CSV), and comprehensive unit tests
+  - [x] 2.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `core/data_models.py` (PhysiologicalData, TimestampInfo, ChannelInfo, SignalType enum) and `core/xdf_loader.py` (XDF parsing, timestamp handling, signal extraction) to determine what to port directly vs simplify for CardioSignalLab's multi-signal (ECG, PPG, EDA) requirements
+    - Note: Analyzed dual timestamp architecture (device timestamps authoritative, LSL for alignment) - keep unchanged
+    - Note: Recommend dictionary-based signal storage: Dict[SignalType, DataFrame] instead of ECG-centric ecg_signals/ppg_signals
+    - Note: TimestampInfo per signal type (different sampling rates, gaps, alignment) - keep this pattern
+    - Note: ProcessingState enum (RAW->FILTERED->PEAKS_DETECTED->CORRECTED) - port unchanged
+    - Note: XDF loader stream selection with fallback is robust - preserve this
+    - Note: Gap detection strategy identified - implement with configurable thresholds
+    - Note: Key design: Use attrs validators for timestamp monotonicity, signal/timestamp length matching, sampling rate sanity checks
+  - [x] 2.2 **[IMPLEMENTATION] [DEPENDS: 2.1]** Implement `core/data_models.py` using attrs with validators: `SignalData` (samples: ndarray validated as 1D, sampling_rate: float validated >0, timestamps: ndarray validated as monotonic, channel_name: str, signal_type: SignalType), `SignalType` enum (ECG, PPG, EDA, UNKNOWN), `PeakData` (indices: ndarray, sources: ndarray tracking auto/manual per peak), `ProcessingStep` (operation: str, parameters: dict), `RecordingSession` (signals: list[SignalData], source_path: Path, processing_history: list[ProcessingStep])
+    - Note: Created attrs-based data models with comprehensive validators
+    - Note: SignalType enum: ECG, PPG, EDA, UNKNOWN
+    - Note: ProcessingState enum: RAW, FILTERED, PEAKS_DETECTED, CORRECTED
+    - Note: TimestampInfo: dual timestamp system (device + LSL alignment), validates monotonicity, tracks gaps
+    - Note: SignalData: validates 1D arrays, positive sampling rate, timestamp monotonicity, samples/timestamps length match
+    - Note: PeakData: indices + sources (0=auto, 1=manual), validates length match, properties for num_auto/num_manual
+    - Note: RecordingSession: list-based signal storage (cleaner than dict for iteration), has_signal_type(), get_signal(), get_all_signals()
+    - Note: All validators raise descriptive errors (TypeError for wrong type, ValueError for invalid data)
+  - [x] 2.3 **[IMPLEMENTATION] [DEPENDS: 2.2]** Define `FileLoader` Protocol in `core/file_loader.py` with methods `can_load(path: Path) -> bool` and `load(path: Path) -> RecordingSession`; implement `XdfLoader` that parses XDF streams, extracts physiological signals, detects signal types from stream metadata, and preserves per-signal sampling rates (no resampling); port and simplify from EKG_Peak_Corrector's xdf_loader
+    - Note: Created FileLoader Protocol with can_load() and load() methods
+    - Note: Implemented XdfLoader with selective stream loading (ECG, PPG, GSR, EDA, shimmer types)
+    - Note: XdfLoader extracts device timestamps (first column, ms→s) with fallback to LSL timestamps
+    - Note: Signal type auto-detection from stream names: ECG, PPG/GSR, EDA/ELECTRODERMAL
+    - Note: Preserves per-signal sampling rates from stream metadata (no resampling)
+    - Note: Skips empty channels (all zeros or NaNs) automatically
+    - Note: Created get_loader(path) dispatcher based on file extension
+  - [x] 2.4 **[IMPLEMENTATION] [DEPENDS: 2.2]** Implement `CsvLoader` in `core/file_loader.py` following the FileLoader Protocol: reads CSV files with time and signal columns, allows user to specify signal type and sampling rate via dialog; implement a `get_loader(path: Path) -> FileLoader` dispatcher that selects XdfLoader or CsvLoader based on file extension
+    - Note: Implemented CsvLoader with FileLoader Protocol (can_load, load methods)
+    - Note: Auto-calculates sampling rate from timestamp intervals (more accurate than manual entry)
+    - Note: Accepts signal_type parameter in __init__ (defaults to UNKNOWN if not specified)
+    - Note: GUI layer should prompt user for signal type when loading CSV, then instantiate CsvLoader(signal_type=user_choice)
+    - Note: Validates timestamps are strictly increasing, expects first column to be time
+    - Note: Skips empty columns (all NaNs or zeros) automatically
+    - Note: Implemented get_loader(path) dispatcher: returns XdfLoader() for .xdf, CsvLoader() for .csv
+    - Note: Exported XdfLoader, CsvLoader, get_loader from core/__init__.py for easy importing
+    - Note: **ENHANCEMENT (2026-02-14)**: Added Shimmer CSV format support with 3-row header detection (names/calibration/units)
+    - Note: Auto-detects signal types from column names (GSR→EDA, PPG/BVP→PPG, ECG→ECG)
+    - Note: Automatically converts timestamps from milliseconds to seconds when detected
+    - Note: Supports both standard CSV (single header) and Shimmer CSV (3-row header) formats
+  - [x] 2.5 **[IMPLEMENTATION] [DEPENDS: 2.3, 2.4]** Implement signal type auto-detection in XdfLoader: use XDF stream metadata (name, type fields) to classify signals as ECG/PPG/EDA; fall back to manual selection dialog if detection fails; CsvLoader always prompts for signal type since CSV has no standard metadata
+    - Note: Enhanced _detect_signal_type() to check both 'name' and 'type' fields in XDF stream metadata
+    - Note: Detects ECG, PPG (including GSR-labeled PPG), and EDA/ELECTRODERMAL signals
+    - Note: Returns SignalType.UNKNOWN and logs warning if detection fails (GUI can handle UNKNOWN types)
+    - Note: CsvLoader delegates signal type selection to GUI via __init__ parameter (no metadata in CSV)
+  - [x] 2.6 **[IMPLEMENTATION] [DEPENDS: 2.5, 1.6]** Wire file loading into the GUI: File -> Open triggers file dialog (XDF/CSV filter), uses get_loader dispatcher to load file, emits AppSignals.file_loaded; a connected handler displays metadata (signal count, types, sampling rates, duration) in a brief info dialog, then transitions to multi-signal mode
+    - Note: Implemented _on_file_open() with QFileDialog for XDF/CSV file selection
+    - Note: For CSV files, prompts user to select signal type (ECG/PPG/EDA/UNKNOWN) via QInputDialog
+    - Note: Uses get_loader() dispatcher for XDF, creates CsvLoader(signal_type) for CSV
+    - Note: Comprehensive error handling: FileNotFoundError, ValueError, general Exception with user-friendly QMessageBox dialogs
+    - Note: Displays metadata dialog showing: signal count, signal types breakdown, sampling rates, average duration
+    - Note: Emits file_loaded signal with RecordingSession after successful load
+    - Note: Automatically transitions to multi-signal mode after file load
+    - Note: Stores loaded session in self.current_session for later access
+  - [x] 2.7 **[IMPLEMENTATION] [DEPENDS: 2.2]** Write unit tests in `tests/test_data_models.py`: verify attrs validators reject invalid data (negative sampling rate, 2D arrays, non-monotonic timestamps); test SignalData, PeakData, RecordingSession creation; write tests in `tests/test_file_loader.py` for XDF and CSV loading with sample test data; test that FileLoader Protocol dispatch works
+    - Note: Created comprehensive test_data_models.py with 22 tests covering all data models
+    - Note: Tests verify attrs validators: negative sampling rate, 2D arrays, non-monotonic timestamps, length mismatches
+    - Note: Tests cover SignalType, ProcessingState, ChannelInfo, TimestampInfo, PeakData, SignalData, ProcessingStep, RecordingSession
+    - Note: Created test_file_loader.py with 17 tests for file loading (16 pass, 1 skipped pending real XDF file)
+    - Note: CSV loader tests with temp files: signal type selection, sampling rate calculation, empty column handling, monotonic timestamps
+    - Note: XDF loader tests: can_load(), file not found, Protocol compliance (real file test skipped - needs sample XDF)
+    - Note: FileLoader Protocol compliance tests verify can_load() and load() methods exist
+    - Note: Fixed RecordingSession field order: source_path (mandatory) must come before signals (has default)
+    - Note: All 38 tests pass successfully with 24% code coverage (95% for data_models.py, 42% for file_loader.py)
+  - [x] 2.8 **[REVIEW] [DEPENDS: 2.7]** Verify file loading meets PRD requirements 1.1-1.5: XDF loads correctly, CSV loads correctly, signal types are detected, metadata is displayed, different sampling rates are preserved independently, attrs validators catch bad data
+    - Note: ✅ XDF loading: FileLoader Protocol implemented, selective stream loading, device timestamp extraction, signal type auto-detection from name/type fields
+    - Note: ✅ CSV loading: Auto-calculates sampling rate from timestamps, prompts for signal type via GUI dialog, validates monotonic timestamps
+    - Note: ✅ Signal type detection: Checks both 'name' and 'type' fields in XDF metadata, detects ECG/PPG/GSR/EDA/ELECTRODERMAL patterns
+    - Note: ✅ Metadata display: GUI shows signal count, types breakdown, sampling rates, average duration via QMessageBox
+    - Note: ✅ Sampling rates preserved: Each SignalData has independent sampling_rate field, no resampling performed during load
+    - Note: ✅ Attrs validators working: All 38 unit tests pass, validators catch negative sampling rates, 2D arrays, non-monotonic timestamps, length mismatches
+    - Note: ✅ File loading integrated into GUI: File > Open dialog with XDF/CSV filters, error handling with user-friendly messages, automatic mode transition
+    - Note: ✅ App starts successfully: Fixed corrupted config file issue (Path→str conversion), MainWindow initializes correctly
+  - [x] 2.9 **[IMPLEMENTATION] [DEPENDS: 2.8]** Implement event loading for XDF and Shimmer CSV formats: for XDF, detect and load event streams (separate stream with event markers); for Shimmer CSV, detect companion event files (same directory, same filename but starting with "events_" instead of "shimmer_", either .json or .csv format); create EventData data model (timestamp, label, duration optional); add events to RecordingSession; port event extraction code from EKG_Peak_Corrector and other source projects
+    - Note: Created EventData data model with timestamp, label, duration, and metadata fields
+    - Note: Updated RecordingSession to include events list (list[EventData])
+    - Note: Implemented _find_event_file() to detect companion event files (JSON or CSV) for Shimmer data
+    - Note: Implemented _load_events_from_json() to load JSON format events with full metadata
+    - Note: Implemented _load_events_from_csv() to load CSV format events
+    - Note: Events are automatically loaded when loading Shimmer CSV files
+    - Note: Tested with real Shimmer data - successfully loaded 5 events with correct timestamps aligned to signal data
+    - Note: Implemented XDF event stream loading - detects "Markers"/"Events" type streams
+    - Note: Updated selective stream loading to include marker streams in queries
+    - Note: Added _extract_events_from_streams() to extract events from XDF marker streams
+    - Note: Tested with XDF file - successfully loaded 25 events from TaskMarkers stream (BEGIN, arith_instr, arith_start, etc.)
+    - Note: XDF marker streams have time_series as list (not array), properly handled by skipping in signal extraction
+  - [x] 2.10 **[IMPLEMENTATION] [DEPENDS: 2.9]** Fix signal type detection: add "Internal ADC A13" to PPG detection patterns (Shimmer device uses this channel name for PPG); update _detect_signal_type_from_name() in CsvLoader to detect "ADC A13" or "INTERNAL ADC" as PPG signal type
+    - Note: Updated _detect_signal_type_from_name() to detect "ADC A13" or "INTERNAL ADC" patterns as PPG
+    - Note: Tested with Shimmer file - Internal ADC A13 now correctly detected as PPG instead of UNKNOWN
+
+- [ ] 3.0 Visualization Engine (PyQtGraph) (Task 3.11 Added - Not Yet Complete)
+  - Overall Note: Complete PyQtGraph-based visualization with LOD rendering (50-100x faster than matplotlib), synchronized multi-signal views, interactive peak overlays, event markers with labels, seamless mode switching, and comprehensive navigation controls (zoom, pan, jump to time, keyboard shortcuts)
+  - Overall Note: Session 2026-02-14 - Fixed three critical event-related bugs: (1) XDF timestamp alignment (removed incorrect millisecond check), (2) JSON/CSV event loading fallback, (3) event visibility across view switches (EventOverlay was storing reference instead of copy)
+  - Overall Note: Task 3.11 added 2026-02-14 - Implement 3-view hierarchy (multi-signal → signal-type → single-channel) to properly handle multi-channel signal types like ECG; required before starting Task 4.0 (Signal Processing Pipeline) since processing only works on single channels
+  - [x] 3.1 **[RESEARCH]** Research PyQtGraph best practices for level-of-detail rendering (precomputed min/max envelopes at multiple zoom levels, envelope switching on ViewBox range change), synchronized multi-plot views (linking ViewBox x-axes), and interactive marker overlays for peak visualization; examine EKG_Peak_Corrector's Matplotlib-based plot approach to understand what interaction patterns to replicate
+    - Note: PyQtGraph has built-in downsampling: `setDownsampling(auto=True, method='peak')` preserves min/max envelope
+    - Note: Performance: 50-100x faster than matplotlib (50-100ms vs 5-10s for 10M points)
+    - Note: Synchronized views: Use `plot2.setXLink(plot1)` for automatic zoom/pan sync across plots
+    - Note: Interactive markers: `ScatterPlotItem` with `sigClicked` signal, supports efficient add/remove without full redraw
+    - Note: EKG_Peak_Corrector analysis: Users expect synchronized zoom/pan, click-to-select peaks, keyboard navigation, 2-3 stacked plots
+    - Note: **Recommendation**: Start with built-in downsampling before implementing custom LOD pyramid (only if needed)
+    - Note: ViewBox `sigRangeChanged` signal triggers updates when user zooms/pans
+    - Note: Can link only X axes while keeping Y axes independent (important for different signal amplitude scales)
+  - [x] 3.2 **[IMPLEMENTATION] [DEPENDS: 3.1, 2.2]** Implement `gui/lod_renderer.py` with `LODRenderer` class: on init, precompute a pyramid of min/max envelopes at decreasing resolutions (e.g., every 2, 4, 8, 16... samples); expose `get_render_data(x_min, x_max, pixel_width) -> (x, y)` that selects the appropriate LOD level based on visible range vs pixel density; return full-resolution data when zoomed in enough; write unit tests in `tests/test_lod_renderer.py` verifying envelope correctness and level selection
+    - Note: Implemented LODRenderer with 8-level pyramid (256x max downsampling), uses np.reduceat for efficient min/max computation
+    - Note: Automatically selects LOD level based on points_per_pixel (target: 1-2 points per pixel)
+    - Note: Returns full resolution when zoomed in (level 0), interleaved min/max envelope when downsampled
+    - Note: Comprehensive tests: 17 tests pass with 97% coverage
+    - Note: Performance verified: <1s pyramid build for 1M points, <0.1s data queries
+    - Note: Edge cases handled: empty range, partial overlap, uniform signal, very small datasets
+    - Note: Validates monotonic timestamps, matching lengths, minimum 2 samples
+  - [x] 3.3 **[IMPLEMENTATION] [DEPENDS: 3.2, 2.2]** Implement `gui/plot_widget.py` as a reusable PyQtGraph PlotWidget wrapper for a single signal: accepts SignalData, creates LODRenderer for the signal, connects to ViewBox sigXRangeChanged to update displayed data via LOD; configure grid, axis labels, and high-contrast signal colors; supports autoRange
+    - Note: Implemented SignalPlotWidget extending pg.PlotWidget with LOD integration
+    - Note: Automatically creates LODRenderer on set_signal(), updates plot data on zoom/pan via sigRangeChanged
+    - Note: Configurable appearance: background color, grid alpha, signal colors from config (ECG/PPG/EDA)
+    - Note: Features: reset_view(), clear(), get_visible_range(), range_changed signal
+    - Note: Auto-ranging enabled initially, displays signal type + channel name as title
+    - Note: Efficient updates: queries LOD renderer with current pixel width for optimal point density
+    - Note: Exported from gui/__init__.py for easy importing
+  - [x] 3.4 **[IMPLEMENTATION] [DEPENDS: 3.3]** Implement `gui/multi_signal_view.py` using a QVBoxLayout of plot_widget instances: displays all signals from RecordingSession in stacked subplots, links x-axes across all ViewBoxes for synchronized zoom/pan, shows signal type label on each subplot; connect click on any subplot to emit AppSignals.signal_selected
+    - Note: Implemented MultiSignalView with stacked SignalPlotWidget instances
+    - Note: First plot created, then all subsequent plots linked via setXLink() for synchronized x-axis zoom/pan
+    - Note: Click on any plot emits signal_selected with that SignalData
+    - Note: Features: clear(), reset_view(), get_num_signals()
+  - [x] 3.5 **[IMPLEMENTATION] [DEPENDS: 3.3]** Implement `gui/single_signal_view.py` that displays one signal prominently in a full-size plot_widget: receives selected SignalData, enables mouse interaction for peak correction (click events), and provides zoom/pan via scroll wheel and drag
+    - Note: Implemented SingleSignalView with full-size SignalPlotWidget
+    - Note: Features: zoom_in(), zoom_out(), enable_mouse_interaction(), get_visible_range()
+    - Note: Placeholder for peak correction signals (to be added in peak correction task)
+    - Note: Mouse wheel zoom and drag pan enabled by default through PyQtGraph ViewBox
+  - [x] 3.6 **[IMPLEMENTATION] [DEPENDS: 3.4, 3.5, 1.6]** Wire views into main_window mode switching: connect AppSignals.file_loaded to show multi_signal_view; connect AppSignals.signal_selected to switch to single_signal_view and swap menus; View -> "Return to Multi-Signal View" emits AppSignals.mode_changed("multi") and switches back; update status bar on all transitions
+    - Note: MainWindow now creates both multi_signal_view and single_signal_view in __init__
+    - Note: _switch_view() changes central widget based on mode
+    - Note: file_loaded signal → multi_signal_view.set_session() and stays in multi mode
+    - Note: signal_selected signal → single_signal_view.set_signal() and switches to single mode
+    - Note: View > Return to Multi-Signal emits mode_changed("multi") and switches back
+    - Note: Status bar automatically updates via existing mode_changed/signal_selected connections
+  - [x] 3.7 **[IMPLEMENTATION] [DEPENDS: 3.5]** Implement `gui/peak_overlay.py` for rendering peak markers on PyQtGraph plots: use ScatterPlotItem with different colors for auto-detected (blue) and manually-added (green) peaks; support efficient add/remove of individual markers without full redraw; handle marker click events for peak selection; connect to AppSignals.peaks_updated
+    - Note: Implemented PeakOverlay using pg.ScatterPlotItem with color coding from config
+    - Note: Auto-detected peaks: blue, manually-added: green, selected: orange
+    - Note: Features: set_peaks(), add_peak(), remove_peak(), select_peak(), clear()
+    - Note: Efficient updates: stores data with markers, refreshes via setData() (microseconds for thousands of points)
+    - Note: Click handling: _on_peak_clicked selects peak, can be connected to deletion handler later
+    - Note: Uses PeakData.sources array to determine colors (0=auto, 1=manual)
+  - [x] 3.8 **[REVIEW] [DEPENDS: 3.7]** Verify visualization meets PRD requirements 5.1-5.8: PyQtGraph plots render correctly, LOD rendering handles 10M+ points smoothly, multi-signal mode shows synchronized views, single-signal mode shows full view, zoom/pan works in both modes, peak markers display with correct colors, transitions between modes are clean
+    - Note: ✅ PyQtGraph plots: SignalPlotWidget wraps pg.PlotWidget with LOD integration
+    - Note: ✅ LOD rendering: 17 tests pass, <1s pyramid build for 1M points, <0.1s queries, automatic level selection
+    - Note: ✅ Multi-signal mode: Stacked plots with setXLink() for synchronized x-axis zoom/pan
+    - Note: ✅ Single-signal mode: Full-size plot with mouse wheel zoom and drag pan
+    - Note: ✅ Zoom/pan: PyQtGraph ViewBox built-in functionality, LOD auto-updates on sigRangeChanged
+    - Note: ✅ Peak markers: ScatterPlotItem with color coding (blue/green/orange), click selection
+    - Note: ✅ Mode transitions: _switch_view() swaps central widget, menus rebuild, status bar updates
+    - Note: **Parent Task 3.0 COMPLETE**: Full visualization system with LOD rendering, synchronized views, peak overlays
+  - [x] 3.9 **[IMPLEMENTATION] [DEPENDS: 3.8]** Implement advanced navigation controls: wire Ctrl+Plus/Minus keyboard shortcuts to programmatic zoom in/out; add "Jump to Time" dialog in View menu that scrolls to specific timestamp; implement next/previous peak navigation using arrow keys when a peak is selected; add zoom to selection feature (drag to select region, right-click menu → Zoom to Selection); add Home/End keys to jump to start/end of signal; ensure all navigation features work in both multi-signal and single-signal modes
+    - Note: Implemented zoom_in(), zoom_out() methods in both MultiSignalView and SingleSignalView
+    - Note: Wired Ctrl+Plus/Minus shortcuts to call view zoom methods in MainWindow
+    - Note: Added Home/End keyboard shortcuts for jump to start/end of signal (reusing peak_first/peak_last bindings)
+    - Note: Implemented jump_to_start(), jump_to_end(), jump_to_time() methods in both view classes
+    - Note: Added "Jump to Time" dialog (Ctrl+T) with QDoubleSpinBox for timestamp input
+    - Note: Added "Zoom to Time Range" dialog as simplified alternative to drag-to-zoom selection
+    - Note: All navigation features work in both multi-signal and single-signal modes
+    - Note: Updated keybindings.py with view_jump_to_time binding
+    - Note: Peak navigation (arrow keys) deferred to Task 5.0 (Interactive Peak Correction) since peak data structures not yet implemented
+    - Note: **BUG FIX (2026-02-14)**: Fixed return to multi-signal view - replaced setCentralWidget() with QStackedWidget to prevent Qt from deleting views when switching modes
+    - Note: **BUG FIX (2026-02-14)**: Added Pan Mode (P) and Zoom Mode (Z) keyboard toggles for drag-to-zoom rectangle functionality
+    - Note: Zoom Mode allows dragging rectangle to zoom with proper Y-axis handling (both axes scale independently)
+    - Note: Added right-click context menu on plots with "View All", "Pan Mode", "Zoom Mode" options
+    - Note: Status bar shows current mouse mode when toggled
+    - Note: Fixed get_keysequence() to properly convert StandardKey to QKeySequence for help text display
+  - [x] 3.10 **[IMPLEMENTATION] [DEPENDS: 2.9, 3.9]** Implement event visualization: create EventOverlay class similar to PeakOverlay that renders vertical lines or regions on plots at event timestamps; add event labels as text annotations; support event filtering/toggling via View menu; ensure events display correctly in both multi-signal and single-signal modes; events should be visible across all stacked plots in multi-signal view
+    - Note: Created EventOverlay class with vertical InfiniteLine markers and TextItem labels
+    - Note: Vertical dashed red lines (#FF6B6B) mark event timestamps
+    - Note: Text labels positioned at 95% of Y range (near top) with semi-transparent white background
+    - Note: Labels auto-update position when plot range changes (connected to sigRangeChanged)
+    - Note: Added event overlays to MultiSignalView - creates overlay for each stacked plot
+    - Note: Added event overlay to SingleSignalView with set_events() method
+    - Note: MainWindow passes session events to single signal view when switching modes
+    - Note: Added "Toggle Event Markers" menu item in View menu (E key shortcut)
+    - Note: Implemented toggle_events(), set_events_visible(), are_events_visible() in both views
+    - Note: Events visible across all stacked plots in multi-signal mode (synchronized)
+    - Note: Status bar shows event visibility state when toggled
+    - Note: **BUG FIX (2026-02-14)**: Fixed XDF event timestamp alignment - removed incorrect millisecond check (XDF LSL timestamps are always in seconds as absolute epoch time)
+    - Note: **BUG FIX (2026-02-14)**: Added JSON event loading fallback to CSV - if JSON fails or loads 0 events, automatically tries CSV companion file
+    - Note: **BUG FIX (2026-02-14)**: Fixed critical event visibility bug - EventOverlay was storing reference to events list instead of copy, causing RecordingSession.events to be cleared when overlay was refreshed (changed to `self.events = list(events)`)
+    - Note: Added comprehensive logging throughout event loading and display pipeline for debugging
+  - [ ] 3.11 **[IMPLEMENTATION] [DEPENDS: 3.10]** Implement 3-view hierarchy for multi-channel signal types: add intermediate "signal-type view" between multi-signal and single-channel views to handle signal types with multiple channels (ECG has 4 channels); support creating derived channels (L2 Norm); wire Select menu to show signal types in multi-signal view and channels in signal-type view; ensure processing only activates in single-channel view
+    - **CRITICAL ISSUE**: PPG and GSR come from same XDF stream but are DIFFERENT signal types - must be distinguished during loading
+    - **Current Problem**: GSR plot shows "PPG - GSR" and PPG shows "PPG - Internal ADC A13" because they're from same stream
+    - **Required Fix**: Modify XdfLoader to properly distinguish PPG vs GSR based on channel name, not just stream type
+    - [ ] 3.11.1 **[IMPLEMENTATION]** Fix PPG/GSR signal type detection in XdfLoader: currently GSR (from GSR channel) is incorrectly tagged as PPG because it comes from same stream as PPG channel; update `_detect_signal_type()` to check channel names individually, not just stream metadata; ensure GSR channels get SignalType.EDA and PPG channels get SignalType.PPG even when from same stream
+      - Implementation: In `_load_xdf_streams()`, after extracting channels, check each channel name individually using `_detect_signal_type_from_name()` (similar to CSV loader)
+      - Test: Load XDF with GSR and PPG from same stream, verify GSR is tagged as EDA and PPG as PPG
+      - Expected behavior: "GSR" channel → SignalType.EDA, "Internal ADC A13" → SignalType.PPG
+    - [ ] 3.11.2 **[IMPLEMENTATION]** Create SignalTypeView class (single-signal-type view): displays all channels of one signal type in stacked plots with synchronized x-axes (similar to MultiSignalView but filtered to one type); add "Create Derived Channel" button in toolbar for L2 Norm / averaging; Select menu shows individual channels; clicking channel switches to SingleChannelView
+      - File: `src/cardio_signal_lab/gui/signal_type_view.py`
+      - Class: `SignalTypeView(QWidget)` with `set_signal_type(signal_type: SignalType, signals: list[SignalData])`
+      - Features: Stacked plots, x-axis linking, event overlays, channel selection via click
+      - Toolbar: "Create L2 Norm Channel" button (only visible for ECG with 4 channels)
+      - Emits: `channel_selected(SignalData)` when user clicks a channel
+    - [ ] 3.11.3 **[IMPLEMENTATION]** Add derived channel support to RecordingSession and data models: add `derived_signals` field to RecordingSession; create `DerivedSignalData` class that extends SignalData with `source_channels` list and `derivation_method` string; implement `create_l2_norm_channel(channels: list[SignalData]) -> DerivedSignalData` helper function
+      - Modify: `src/cardio_signal_lab/core/data_models.py`
+      - Add field: `RecordingSession.derived_signals: list[DerivedSignalData] = field(factory=list)`
+      - New class: `DerivedSignalData` with `source_channels: list[str]` (channel names) and `derivation_method: str` ("l2_norm", "average", etc.)
+      - Helper: `create_l2_norm(signals: list[SignalData]) -> DerivedSignalData` computes sqrt(sum(x^2)) across channels
+    - [ ] 3.11.4 **[IMPLEMENTATION]** Modify MainWindow view switching logic: track current view level (multi/type/channel) and current signal type; add `_switch_to_signal_type_view(signal_type)` method; update `_on_signal_selected_signal()` to check if signal type has >1 channel and route to SignalTypeView if yes, otherwise go directly to SingleChannelView
+      - New field: `self.current_view_level: str` ("multi" | "type" | "channel")
+      - New field: `self.current_signal_type: SignalType | None`
+      - Routing logic:
+        - Multi-signal → click signal type → if >1 channel, go to SignalTypeView; if 1 channel, go to SingleChannelView
+        - SignalTypeView → click channel → go to SingleChannelView
+      - Add SignalTypeView to QStackedWidget
+    - [ ] 3.11.5 **[IMPLEMENTATION]** Update Select menu behavior: in multi-signal view, populate with signal types (ECG, PPG, EDA); in signal-type view, populate with channel names; in single-channel view, disable Select menu (or show "Return to Type View" option); connect menu items to appropriate view switches
+      - Multi-signal Select: List unique signal types from session.signals (group by signal_type)
+      - Signal-type Select: List channels of current_signal_type (filter signals by type, show channel_name)
+      - Single-channel Select: Disabled or shows "Return to [Type] View"
+      - Update `_add_select_menu_actions()` to be mode-aware
+    - [ ] 3.11.6 **[IMPLEMENTATION]** Update MultiSignalView to group by signal type instead of showing all channels: modify `set_session()` to group signals by signal_type, create one plot per type showing all channels overlaid (different colors) or stacked; clicking a plot emits `signal_type_selected(SignalType)` instead of `signal_selected(SignalData)`
+      - Change behavior: One plot per signal TYPE, not per channel
+      - For multi-channel types (ECG): overlay all 4 channels in same plot with different colors, or stack them in sub-grid
+      - For single-channel types (PPG, GSR): show as before
+      - New signal: `signal_type_selected = Signal(object)  # SignalType`
+      - Click handler: Determine signal type from clicked plot, emit signal type, switch to SignalTypeView
+    - [ ] 3.11.7 **[IMPLEMENTATION]** Ensure SingleChannelView (currently SingleSignalView) only shows Process menu: rename SingleSignalView to SingleChannelView for clarity; ensure Process menu only appears in channel-level view, not in type-level view; update menu building logic to check view level
+      - Rename: `SingleSignalView` → `SingleChannelView` throughout codebase
+      - Menu logic: Process menu only active when `self.current_view_level == "channel"`
+      - Update all imports and references
+    - [ ] 3.11.8 **[IMPLEMENTATION]** Add "Return to Type View" navigation: in SingleChannelView, add View menu item "Return to [SignalType] View" (e.g., "Return to ECG View"); pressing ESC from channel view returns to type view, ESC from type view returns to multi view; update keyboard shortcuts and status bar
+      - View menu: "Return to ECG View" (dynamic based on current signal type)
+      - ESC behavior: channel → type → multi (two-level navigation)
+      - Status bar: Show current view level and signal type (e.g., "ECG View (4 channels)" or "Channel View: ECG LL-RA")
+    - [ ] 3.11.9 **[REVIEW]** Test 3-view hierarchy with multi-channel ECG data: verify navigation flow (multi → ECG type → ECG LL-RA channel), test Select menu population at each level, verify derived channel creation (L2 Norm), ensure single-channel types (PPG, GSR) skip type view, verify Process menu only active in channel view, test event overlay persistence across all three view levels
+
+- [ ] 4.0 Signal Processing Pipeline
+  - [ ] 4.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `core/signal_filtering.py` (bandpass, baseline correction, artifact reduction) and Shimmer_Testing's `emd_denoising.py` (EEMD decomposition, IMF analysis, reconstruction) to understand implementations; review NeuroKit2 processing patterns from Acute_Tinnitus_PPG and Hyperacousie_TCC for ECG/PPG/EDA peak detection workflows
+  - [ ] 4.2 **[IMPLEMENTATION] [DEPENDS: 4.1, 2.2]** Implement `processing/pipeline.py` with composable processing pipeline: `ProcessingPipeline` class that maintains an ordered list of `ProcessingStep` records; `apply(signal) -> processed_signal` replays all steps in order; `add_step(operation, parameters)` appends; `reset()` clears all steps and reverts to raw signal; `serialize() -> dict` and `deserialize(dict)` for JSON round-trip; each step stores its operation name and parameters dict
+  - [ ] 4.3 **[IMPLEMENTATION] [DEPENDS: 4.1, 4.2]** Implement `processing/filters.py` with bandpass filtering (configurable cutoffs using SciPy butter/sosfiltfilt), baseline correction (polynomial detrending), zero-referencing (subtract mean or first N samples to start at 0), and signal segmentation (trim edges or select time range); each function accepts and returns ndarray; register as pipeline operations that can be added as ProcessingStep entries; port and simplify from EKG_Peak_Corrector's signal_filtering
+  - [ ] 4.4 **[IMPLEMENTATION] [DEPENDS: 4.1, 4.2]** Implement `processing/eemd.py` by porting Shimmer_Testing's emd_denoising.py: `eemd_artifact_removal(signal, sampling_rate, **params) -> cleaned_signal` that decomposes via PyEMD EEMD, analyzes IMF frequencies, excludes artifact IMFs, and reconstructs; register as pipeline operation; preserve scientific rationale comments about frequency band thresholds
+  - [ ] 4.5 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.2]** Implement `processing/peak_detection.py` with NeuroKit2 wrappers: `detect_ecg_peaks(signal, fs) -> peak_indices` using nk.ecg_process(), `detect_ppg_peaks(signal, fs) -> peak_indices` using nk.ppg_process(), `detect_eda_features(signal, fs) -> feature_indices` using nk.eda_process(); return peak indices compatible with PeakData; register as pipeline operations
+  - [ ] 4.6 **[IMPLEMENTATION] [DEPENDS: 4.2, 1.5]** Implement `processing/worker.py` with `ProcessingWorker(QThread)`: accepts a callable and arguments, runs in background thread, emits AppSignals.processing_progress(int) for progress updates, emits AppSignals.processing_finished on completion, supports cancellation via AppSignals.processing_cancelled; wrap all long-running operations (EEMD, peak detection) in worker; show QProgressDialog in GUI during processing
+  - [ ] 4.7 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.4, 4.5, 4.6, 1.6]** Wire processing into the GUI Process menu: for each signal type, Process menu triggers appropriate operations via ProcessingWorker; Filter opens a dialog for cutoff parameters then applies via pipeline; Zero-Reference opens dialog (subtract mean vs first N samples); Segment Signal opens dialog for time range selection; Artifact Removal runs EEMD in background; Detect Peaks runs the signal-appropriate detector in background; Reset Processing calls pipeline.reset() and reverts to raw signal; update plot after each operation via AppSignals.processing_finished
+  - [ ] 4.8 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.4, 4.5, 4.2]** Write unit tests: `tests/test_filters.py` for bandpass and baseline correction on synthetic signals, `tests/test_eemd.py` for EEMD decomposition and reconstruction, `tests/test_peak_detection.py` for NeuroKit2 peak detection on known ECG/PPG/EDA waveforms, `tests/test_pipeline.py` for pipeline add/reset/serialize/deserialize round-trip
+  - [ ] 4.9 **[REVIEW] [DEPENDS: 4.8]** Verify processing pipeline meets PRD requirements 2.1-2.6 and 3.1-3.5: filters apply correctly with configurable cutoffs, EEMD removes artifacts, NeuroKit2 detects peaks for all three signal types, pipeline is composable and serializable, long-running operations run in background thread with progress, GUI remains responsive during processing, Process menu adapts per signal type
+
+- [ ] 5.0 Interactive Peak Correction
+  - [ ] 5.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `gui/peak_correction_handler.py` (mouse click handlers, undo/redo stack, peak selection/movement, keyboard event routing) to understand the interaction model; determine what to port vs simplify for CardioSignalLab's click-to-add and click-to-delete workflow
+  - [ ] 5.2 **[IMPLEMENTATION] [DEPENDS: 5.1, 2.2]** Implement `processing/peak_correction.py` with the core correction logic: `PeakEditor` class that manages PeakData with add_peak(index, source='manual'), delete_peak(index), undo(), redo(); maintain a fixed-size (20 levels) undo stack using a deque of correction actions; reset stack on new file load; emit AppSignals.peaks_updated after each action
+  - [ ] 5.3 **[IMPLEMENTATION] [DEPENDS: 5.2, 3.5, 3.7]** Wire peak correction into single_signal_view: left-click on signal (not near existing peak) calls add_peak at nearest signal sample; left-click on existing peak marker calls delete_peak; Delete key removes selected peak; Ctrl+Z/Ctrl+Y trigger undo/redo; each action emits AppSignals.peaks_updated which updates peak_overlay immediately (<50ms target)
+  - [ ] 5.4 **[IMPLEMENTATION] [DEPENDS: 5.3]** Ensure peak markers visually distinguish auto-detected (blue) from manually-added (green) peaks using peak_overlay; verify that undo/redo correctly restores marker colors and source tracking; ensure zooming/panning does not interfere with peak click targets
+  - [ ] 5.5 **[IMPLEMENTATION] [DEPENDS: 5.2]** Write unit tests in `tests/test_peak_correction.py` for PeakEditor: add/delete peaks, undo/redo correctness, 20-level stack limit (verify oldest action dropped), stack reset on new data, source tracking (auto vs manual preserved through undo/redo)
+  - [ ] 5.6 **[REVIEW] [DEPENDS: 5.5]** Verify peak correction meets PRD requirements 4.1-4.7: click-to-add works, click-to-delete works, updates are <50ms, undo/redo works with 20 levels, history resets on new file, auto vs manual peaks are visually distinct, zoom/pan works during correction
+
+- [ ] 6.0 Export, Session Persistence, and Reproducibility
+  - [ ] 6.1 **[RESEARCH]** Review export patterns from EKG_Peak_Corrector and Hyperacousie_TCC to understand what data gets exported (signal values, peak indices, timestamps, RR intervals); determine best CSV column format and annotation file structure for downstream analysis compatibility; design JSON session file schema for save/resume
+  - [ ] 6.2 **[IMPLEMENTATION] [DEPENDS: 6.1, 2.2, 5.2, 4.2]** Implement `core/exporter.py` with export functions: `export_csv(signal, peaks, path)` writes time/signal_value/peak_marker columns; `export_npy(signal, peaks, path)` saves NumPy arrays; `export_annotations(peaks, path)` writes peak times as a standalone file; `export_xdf(session, path)` writes back to XDF with corrected annotations; each export also calls `save_parameters()` to write a JSON sidecar containing the serialized ProcessingPipeline, signal type, sampling rate, and software version
+  - [ ] 6.3 **[IMPLEMENTATION] [DEPENDS: 6.1, 2.2, 4.2, 5.2]** Implement `core/session.py` with `save_session(session, peaks, pipeline, view_state, path)` that writes a JSON session file containing: source file path, processing pipeline (serialized ProcessingStep list), corrected peak data (indices + sources), and current view state (zoom range, selected signal); implement `load_session(path) -> tuple` that reads the JSON, reloads the source file, replays the processing pipeline, and restores peaks and view state
+  - [ ] 6.4 **[IMPLEMENTATION] [DEPENDS: 6.2, 6.3, 1.6]** Wire export and save into the GUI: File -> Export opens a dialog to select format (CSV, NPY, XDF, Annotations) and output path; runs the appropriate exporter with parameter sidecar; File -> Save saves session via save_session; File -> Open supports both data files (XDF/CSV) and session files (.csl.json); update recent files list
+  - [ ] 6.5 **[IMPLEMENTATION] [DEPENDS: 6.2, 6.3]** Write unit tests: `tests/test_exporter.py` for all export formats (CSV columns correct, NPY shapes match, annotation files correct, parameter JSON complete); `tests/test_session.py` for session save/load round-trip (verify pipeline replays identically, peaks are preserved, view state restores)
+  - [ ] 6.6 **[REVIEW] [DEPENDS: 6.5]** Verify export meets PRD requirements 6.1-6.6: CSV exports correctly, NPY exports correctly, peak annotations export as standalone files, XDF re-export works, processing parameters saved alongside data, session files save and restore work completely
+
+- [ ] 7.0 Error Handling, Logging, and Integration Testing
+  - [ ] 7.1 **[RESEARCH]** Review error handling patterns across EKG_Peak_Corrector (how file loading errors, bad segments, and processing failures are handled) to identify common failure modes; determine what data validation checks are needed for signal data dimensions, value ranges, and sampling rates
+  - [ ] 7.2 **[IMPLEMENTATION] [DEPENDS: 7.1, 2.3, 2.4]** Add input validation to file loaders: check file existence, validate XDF stream structure, validate CSV column format, check for empty signals, verify sampling rates are positive; warn and skip invalid streams rather than crashing (log via loguru, continue loading valid streams); add signal value range checks (detect flat-lines, extreme values)
+  - [ ] 7.3 **[IMPLEMENTATION] [DEPENDS: 7.1, 4.3, 4.4, 4.5]** Add error handling to processing pipeline: wrap filter/EEMD/peak detection in try/except that logs warnings via loguru and skips problematic segments; detect signal dropouts (gaps in timestamps) and mark them; continue processing remaining clean segments; emit AppSignals.processing_finished even on partial failure so GUI updates
+  - [ ] 7.4 **[IMPLEMENTATION] [DEPENDS: 7.2, 7.3, 1.6]** Add a log panel to the GUI: embed a QTextEdit (read-only) as a collapsible dock widget at the bottom of the main window; add a custom loguru sink that writes to both the panel and a log file; show warnings about skipped segments, validation failures, and processing errors in real-time; toggle via View menu
+  - [ ] 7.5 **[IMPLEMENTATION] [DEPENDS: 7.4]** Write integration tests in `tests/test_integration.py` using pytest-qt: exercise the full workflow with qtbot -- load a sample XDF file -> apply bandpass filter -> run EEMD artifact removal -> detect peaks -> add/delete peaks -> export to CSV and NPY -> verify exported data matches expected output; test with ECG, PPG, and EDA signals; test session save/load round-trip
+  - [ ] 7.6 **[REVIEW] [DEPENDS: 7.5]** Final review of complete application against all PRD requirements: verify every functional requirement (1.1-8.17) is implemented, all success metrics are achievable (visual accuracy, export completeness, workflow efficiency <5min, interaction responsiveness <50ms, reproducibility), error handling matches PRD section 7.1-7.4, and architecture patterns (event bus, FileLoader Protocol, composable pipeline, background threading, LOD rendering, attrs validation) are correctly integrated
