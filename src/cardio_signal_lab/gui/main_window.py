@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -13,16 +14,22 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QDoubleSpinBox,
     QDialogButtonBox,
+    QLabel,
+    QComboBox,
+    QSpinBox,
+    QProgressDialog,
     QStackedWidget,
 )
+from PySide6.QtCore import Qt
 from loguru import logger
 
 from cardio_signal_lab.config import get_config, get_keysequence
-from cardio_signal_lab.core import get_loader, SignalType, CsvLoader
+from cardio_signal_lab.core import get_loader, SignalType, CsvLoader, PeakData
 from cardio_signal_lab.gui.multi_signal_view import MultiSignalView
 from cardio_signal_lab.gui.signal_type_view import SignalTypeView
 from cardio_signal_lab.gui.single_channel_view import SingleChannelView
 from cardio_signal_lab.gui.status_bar import AppStatusBar
+from cardio_signal_lab.processing import ProcessingPipeline, ProcessingWorker
 from cardio_signal_lab.signals import get_app_signals
 
 if TYPE_CHECKING:
@@ -56,6 +63,12 @@ class MainWindow(QMainWindow):
         self.current_signal: SignalData | None = None
         # Track whether we came from type view (for ESC navigation)
         self._came_from_type_view = False
+
+        # Processing state
+        self.pipeline = ProcessingPipeline()
+        self._raw_samples: np.ndarray | None = None  # Original unprocessed signal
+        self._current_peaks: PeakData | None = None
+        self._processing_worker: ProcessingWorker | None = None
 
         # Window setup
         self.setWindowTitle("CardioSignalLab")
@@ -250,13 +263,29 @@ class MainWindow(QMainWindow):
 
     def _add_process_menu_actions(self, menu):
         """Add Process menu actions (channel view only)."""
-        filter_action = QAction("&Filter...", self)
+        filter_action = QAction("&Bandpass Filter...", self)
         filter_action.triggered.connect(self._on_process_filter)
         menu.addAction(filter_action)
 
-        artifact_action = QAction("&Artifact Removal (EEMD)", self)
+        notch_action = QAction("&Notch Filter...", self)
+        notch_action.triggered.connect(self._on_process_notch)
+        menu.addAction(notch_action)
+
+        baseline_action = QAction("Baseline &Correction...", self)
+        baseline_action.triggered.connect(self._on_process_baseline)
+        menu.addAction(baseline_action)
+
+        zero_ref_action = QAction("&Zero-Reference...", self)
+        zero_ref_action.triggered.connect(self._on_process_zero_reference)
+        menu.addAction(zero_ref_action)
+
+        menu.addSeparator()
+
+        artifact_action = QAction("&Artifact Removal (EEMD)...", self)
         artifact_action.triggered.connect(self._on_process_artifact_removal)
         menu.addAction(artifact_action)
+
+        menu.addSeparator()
 
         detect_peaks_action = QAction("&Detect Peaks", self)
         detect_peaks_action.triggered.connect(self._on_process_detect_peaks)
@@ -415,6 +444,11 @@ class MainWindow(QMainWindow):
         self.current_view_level = "channel"
         self.current_signal = signal
 
+        # Reset processing state for new signal
+        self.pipeline.reset()
+        self._raw_samples = None
+        self._current_peaks = None
+
         self.single_channel_view.set_signal(signal)
 
         # Pass events
@@ -569,17 +603,369 @@ class MainWindow(QMainWindow):
 
     # ---- Process Operations ----
 
+    def _ensure_raw_backup(self):
+        """Ensure we have a backup of the raw signal before processing."""
+        if self._raw_samples is None and self.current_signal is not None:
+            self._raw_samples = self.current_signal.samples.copy()
+
+    def _apply_pipeline_and_update(self):
+        """Re-apply pipeline from raw signal and update the plot."""
+        if self._raw_samples is None or self.current_signal is None:
+            return
+
+        processed = self.pipeline.apply(self._raw_samples, self.current_signal.sampling_rate)
+
+        # Update signal samples in-place (attrs doesn't allow direct assignment)
+        object.__setattr__(self.current_signal, "samples", processed)
+
+        # Refresh the plot
+        self.single_channel_view.set_signal(self.current_signal)
+        if self.current_session:
+            self.single_channel_view.set_events(self.current_session.events or [])
+
+        n_steps = self.pipeline.num_steps
+        self.statusBar().showMessage(f"Processing applied ({n_steps} steps)", 3000)
+
     def _on_process_filter(self):
-        logger.info("Process > Filter triggered")
+        """Handle Process > Bandpass Filter."""
+        if self.current_signal is None:
+            return
+
+        config = get_config()
+        sig_type = self.current_signal.signal_type
+
+        # Set defaults based on signal type
+        if sig_type == SignalType.ECG:
+            default_low = config.processing.ecg_lowcut
+            default_high = config.processing.ecg_highcut
+            default_order = config.processing.ecg_filter_order
+        elif sig_type == SignalType.PPG:
+            default_low = config.processing.ppg_lowcut
+            default_high = config.processing.ppg_highcut
+            default_order = config.processing.ppg_filter_order
+        else:
+            default_low = config.processing.eda_lowcut
+            default_high = config.processing.eda_highcut
+            default_order = 4
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Bandpass Filter")
+        layout = QFormLayout(dialog)
+
+        low_spin = QDoubleSpinBox()
+        low_spin.setDecimals(2)
+        low_spin.setRange(0.01, 500.0)
+        low_spin.setValue(default_low)
+        low_spin.setSuffix(" Hz")
+        layout.addRow("Low cutoff:", low_spin)
+
+        high_spin = QDoubleSpinBox()
+        high_spin.setDecimals(2)
+        high_spin.setRange(0.01, 500.0)
+        high_spin.setValue(default_high)
+        high_spin.setSuffix(" Hz")
+        layout.addRow("High cutoff:", high_spin)
+
+        order_spin = QSpinBox()
+        order_spin.setRange(1, 10)
+        order_spin.setValue(default_order)
+        layout.addRow("Filter order:", order_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        lowcut = low_spin.value()
+        highcut = high_spin.value()
+        order = order_spin.value()
+
+        if lowcut >= highcut:
+            QMessageBox.warning(self, "Invalid", "Low cutoff must be less than high cutoff.")
+            return
+
+        self._ensure_raw_backup()
+        self.pipeline.add_step("bandpass", {
+            "lowcut": lowcut, "highcut": highcut, "order": order
+        })
+        self._apply_pipeline_and_update()
+        logger.info(f"Bandpass filter applied: {lowcut}-{highcut} Hz, order {order}")
+
+    def _on_process_notch(self):
+        """Handle Process > Notch Filter."""
+        if self.current_signal is None:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Notch Filter")
+        layout = QFormLayout(dialog)
+
+        freq_spin = QDoubleSpinBox()
+        freq_spin.setDecimals(1)
+        freq_spin.setRange(1.0, 500.0)
+        freq_spin.setValue(60.0)
+        freq_spin.setSuffix(" Hz")
+        layout.addRow("Notch frequency:", freq_spin)
+
+        q_spin = QDoubleSpinBox()
+        q_spin.setDecimals(1)
+        q_spin.setRange(1.0, 100.0)
+        q_spin.setValue(30.0)
+        layout.addRow("Quality factor:", q_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._ensure_raw_backup()
+        self.pipeline.add_step("notch", {
+            "freq": freq_spin.value(), "quality_factor": q_spin.value()
+        })
+        self._apply_pipeline_and_update()
+
+    def _on_process_baseline(self):
+        """Handle Process > Baseline Correction."""
+        if self.current_signal is None:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Baseline Correction")
+        layout = QFormLayout(dialog)
+
+        order_spin = QSpinBox()
+        order_spin.setRange(1, 10)
+        order_spin.setValue(3)
+        layout.addRow("Polynomial order:", order_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._ensure_raw_backup()
+        self.pipeline.add_step("baseline_correction", {"poly_order": order_spin.value()})
+        self._apply_pipeline_and_update()
+
+    def _on_process_zero_reference(self):
+        """Handle Process > Zero-Reference."""
+        if self.current_signal is None:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Zero-Reference")
+        layout = QFormLayout(dialog)
+
+        method_combo = QComboBox()
+        method_combo.addItems(["mean", "first_n"])
+        layout.addRow("Method:", method_combo)
+
+        n_spin = QSpinBox()
+        n_spin.setRange(1, 10000)
+        n_spin.setValue(100)
+        layout.addRow("N samples (first_n only):", n_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._ensure_raw_backup()
+        params = {"method": method_combo.currentText()}
+        if method_combo.currentText() == "first_n":
+            params["n_samples"] = n_spin.value()
+        self.pipeline.add_step("zero_reference", params)
+        self._apply_pipeline_and_update()
 
     def _on_process_artifact_removal(self):
-        logger.info("Process > Artifact Removal triggered")
+        """Handle Process > Artifact Removal (EEMD)."""
+        if self.current_signal is None:
+            return
+
+        config = get_config()
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("EEMD Artifact Removal")
+        layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel("Warning: EEMD is slow (30-90s for long signals)."))
+
+        ensemble_spin = QSpinBox()
+        ensemble_spin.setRange(50, 2000)
+        ensemble_spin.setValue(config.processing.eemd_ensemble_size)
+        layout.addRow("Ensemble size:", ensemble_spin)
+
+        noise_spin = QDoubleSpinBox()
+        noise_spin.setDecimals(2)
+        noise_spin.setRange(0.01, 1.0)
+        noise_spin.setValue(config.processing.eemd_noise_width)
+        layout.addRow("Noise width:", noise_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._ensure_raw_backup()
+
+        ensemble_size = ensemble_spin.value()
+        noise_width = noise_spin.value()
+
+        # Show progress dialog
+        progress = QProgressDialog("Running EEMD decomposition...", "Cancel", 0, 0, self)
+        progress.setWindowTitle("Artifact Removal")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+
+        # Run EEMD in background thread
+        from cardio_signal_lab.processing.eemd import eemd_artifact_removal
+
+        # Get current processed signal (pipeline applied up to now)
+        current_samples = self.current_signal.samples.copy()
+        sr = self.current_signal.sampling_rate
+
+        def run_eemd():
+            return eemd_artifact_removal(
+                current_samples, sr,
+                ensemble_size=ensemble_size,
+                noise_width=noise_width,
+                random_seed=config.processing.random_seed,
+            )
+
+        worker = ProcessingWorker(run_eemd)
+        self._processing_worker = worker
+
+        def on_finished(result):
+            progress.close()
+            self._processing_worker = None
+            # Store EEMD result directly (not through pipeline replay since EEMD
+            # depends on the current signal state, not raw)
+            self.pipeline.add_step("eemd_artifact_removal", {
+                "ensemble_size": ensemble_size,
+                "noise_width": noise_width,
+            })
+            # For EEMD, we replace raw_samples with the result and rebuild pipeline
+            # knowledge. Since EEMD is order-dependent on the input state,
+            # we apply it directly to the current signal.
+            object.__setattr__(self.current_signal, "samples", result)
+            self.single_channel_view.set_signal(self.current_signal)
+            if self.current_session:
+                self.single_channel_view.set_events(self.current_session.events or [])
+            self.statusBar().showMessage("EEMD artifact removal complete", 5000)
+            logger.info("EEMD artifact removal applied to signal")
+
+        def on_error(msg):
+            progress.close()
+            self._processing_worker = None
+            QMessageBox.critical(self, "EEMD Error", f"Artifact removal failed:\n{msg}")
+
+        worker.finished.connect(on_finished)
+        worker.error.connect(on_error)
+        progress.canceled.connect(worker.cancel)
+        worker.start()
 
     def _on_process_detect_peaks(self):
-        logger.info("Process > Detect Peaks triggered")
+        """Handle Process > Detect Peaks."""
+        if self.current_signal is None:
+            return
+
+        sig_type = self.current_signal.signal_type
+        samples = self.current_signal.samples
+        sr = self.current_signal.sampling_rate
+
+        self.statusBar().showMessage("Detecting peaks...", 0)
+
+        try:
+            if sig_type == SignalType.ECG:
+                from cardio_signal_lab.processing.peak_detection import detect_ecg_peaks
+                peak_indices = detect_ecg_peaks(samples, sr)
+            elif sig_type == SignalType.PPG:
+                from cardio_signal_lab.processing.peak_detection import detect_ppg_peaks
+                peak_indices = detect_ppg_peaks(samples, sr)
+            elif sig_type == SignalType.EDA:
+                from cardio_signal_lab.processing.peak_detection import detect_eda_features
+                peak_indices = detect_eda_features(samples, sr)
+            else:
+                QMessageBox.warning(
+                    self, "Unknown Signal Type",
+                    "Cannot detect peaks for UNKNOWN signal type."
+                )
+                return
+
+            # Create PeakData (all auto-detected, source=0)
+            sources = np.zeros(len(peak_indices), dtype=int)
+            self._current_peaks = PeakData(
+                indices=peak_indices.astype(int),
+                sources=sources,
+            )
+
+            # Update peak overlay on single channel view
+            if not hasattr(self.single_channel_view, 'peak_overlay'):
+                from cardio_signal_lab.gui.peak_overlay import PeakOverlay
+                self.single_channel_view.peak_overlay = PeakOverlay(
+                    self.single_channel_view.plot_widget
+                )
+            self.single_channel_view.peak_overlay.set_peaks(
+                self.current_signal, self._current_peaks
+            )
+
+            self.signals.peaks_updated.emit(self._current_peaks)
+            self.statusBar().showMessage(
+                f"Detected {len(peak_indices)} peaks ({sig_type.value.upper()})", 5000
+            )
+
+        except Exception as e:
+            logger.error(f"Peak detection failed: {e}")
+            QMessageBox.critical(self, "Error", f"Peak detection failed:\n{e}")
+            self.statusBar().clearMessage()
 
     def _on_process_reset(self):
-        logger.info("Process > Reset Processing triggered")
+        """Handle Process > Reset Processing - revert to raw signal."""
+        if self._raw_samples is None:
+            self.statusBar().showMessage("No processing to reset", 3000)
+            return
+
+        if self.current_signal is None:
+            return
+
+        # Restore raw samples
+        object.__setattr__(self.current_signal, "samples", self._raw_samples.copy())
+        self.pipeline.reset()
+        self._current_peaks = None
+
+        # Refresh plot
+        self.single_channel_view.set_signal(self.current_signal)
+        if self.current_session:
+            self.single_channel_view.set_events(self.current_session.events or [])
+
+        self.statusBar().showMessage("Processing reset to raw signal", 3000)
+        logger.info("Processing pipeline reset")
 
     # ---- View Operations ----
 

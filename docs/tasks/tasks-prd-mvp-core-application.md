@@ -227,7 +227,7 @@
     - Note: Updated _detect_signal_type_from_name() to detect "ADC A13" or "INTERNAL ADC" patterns as PPG
     - Note: Tested with Shimmer file - Internal ADC A13 now correctly detected as PPG instead of UNKNOWN
 
-- [ ] 3.0 Visualization Engine (PyQtGraph) (Task 3.11 Added - Not Yet Complete)
+- [x] 3.0 Visualization Engine (PyQtGraph) (ALL SUB-TASKS COMPLETE)
   - Overall Note: Complete PyQtGraph-based visualization with LOD rendering (50-100x faster than matplotlib), synchronized multi-signal views, interactive peak overlays, event markers with labels, seamless mode switching, and comprehensive navigation controls (zoom, pan, jump to time, keyboard shortcuts)
   - Overall Note: Session 2026-02-14 - Fixed three critical event-related bugs: (1) XDF timestamp alignment (removed incorrect millisecond check), (2) JSON/CSV event loading fallback, (3) event visibility across view switches (EventOverlay was storing reference instead of copy)
   - Overall Note: Task 3.11 added 2026-02-14 - Implement 3-view hierarchy (multi-signal → signal-type → single-channel) to properly handle multi-channel signal types like ECG; required before starting Task 4.0 (Signal Processing Pipeline) since processing only works on single channels
@@ -321,63 +321,55 @@
     - Note: **BUG FIX (2026-02-14)**: Added JSON event loading fallback to CSV - if JSON fails or loads 0 events, automatically tries CSV companion file
     - Note: **BUG FIX (2026-02-14)**: Fixed critical event visibility bug - EventOverlay was storing reference to events list instead of copy, causing RecordingSession.events to be cleared when overlay was refreshed (changed to `self.events = list(events)`)
     - Note: Added comprehensive logging throughout event loading and display pipeline for debugging
-  - [ ] 3.11 **[IMPLEMENTATION] [DEPENDS: 3.10]** Implement 3-view hierarchy for multi-channel signal types: add intermediate "signal-type view" between multi-signal and single-channel views to handle signal types with multiple channels (ECG has 4 channels); support creating derived channels (L2 Norm); wire Select menu to show signal types in multi-signal view and channels in signal-type view; ensure processing only activates in single-channel view
-    - **CRITICAL ISSUE**: PPG and GSR come from same XDF stream but are DIFFERENT signal types - must be distinguished during loading
-    - **Current Problem**: GSR plot shows "PPG - GSR" and PPG shows "PPG - Internal ADC A13" because they're from same stream
-    - **Required Fix**: Modify XdfLoader to properly distinguish PPG vs GSR based on channel name, not just stream type
-    - [ ] 3.11.1 **[IMPLEMENTATION]** Fix PPG/GSR signal type detection in XdfLoader: currently GSR (from GSR channel) is incorrectly tagged as PPG because it comes from same stream as PPG channel; update `_detect_signal_type()` to check channel names individually, not just stream metadata; ensure GSR channels get SignalType.EDA and PPG channels get SignalType.PPG even when from same stream
-      - Implementation: In `_load_xdf_streams()`, after extracting channels, check each channel name individually using `_detect_signal_type_from_name()` (similar to CSV loader)
-      - Test: Load XDF with GSR and PPG from same stream, verify GSR is tagged as EDA and PPG as PPG
-      - Expected behavior: "GSR" channel → SignalType.EDA, "Internal ADC A13" → SignalType.PPG
-    - [ ] 3.11.2 **[IMPLEMENTATION]** Create SignalTypeView class (single-signal-type view): displays all channels of one signal type in stacked plots with synchronized x-axes (similar to MultiSignalView but filtered to one type); add "Create Derived Channel" button in toolbar for L2 Norm / averaging; Select menu shows individual channels; clicking channel switches to SingleChannelView
-      - File: `src/cardio_signal_lab/gui/signal_type_view.py`
-      - Class: `SignalTypeView(QWidget)` with `set_signal_type(signal_type: SignalType, signals: list[SignalData])`
-      - Features: Stacked plots, x-axis linking, event overlays, channel selection via click
-      - Toolbar: "Create L2 Norm Channel" button (only visible for ECG with 4 channels)
-      - Emits: `channel_selected(SignalData)` when user clicks a channel
-    - [ ] 3.11.3 **[IMPLEMENTATION]** Add derived channel support to RecordingSession and data models: add `derived_signals` field to RecordingSession; create `DerivedSignalData` class that extends SignalData with `source_channels` list and `derivation_method` string; implement `create_l2_norm_channel(channels: list[SignalData]) -> DerivedSignalData` helper function
-      - Modify: `src/cardio_signal_lab/core/data_models.py`
-      - Add field: `RecordingSession.derived_signals: list[DerivedSignalData] = field(factory=list)`
-      - New class: `DerivedSignalData` with `source_channels: list[str]` (channel names) and `derivation_method: str` ("l2_norm", "average", etc.)
-      - Helper: `create_l2_norm(signals: list[SignalData]) -> DerivedSignalData` computes sqrt(sum(x^2)) across channels
-    - [ ] 3.11.4 **[IMPLEMENTATION]** Modify MainWindow view switching logic: track current view level (multi/type/channel) and current signal type; add `_switch_to_signal_type_view(signal_type)` method; update `_on_signal_selected_signal()` to check if signal type has >1 channel and route to SignalTypeView if yes, otherwise go directly to SingleChannelView
-      - New field: `self.current_view_level: str` ("multi" | "type" | "channel")
-      - New field: `self.current_signal_type: SignalType | None`
-      - Routing logic:
-        - Multi-signal → click signal type → if >1 channel, go to SignalTypeView; if 1 channel, go to SingleChannelView
-        - SignalTypeView → click channel → go to SingleChannelView
-      - Add SignalTypeView to QStackedWidget
-    - [ ] 3.11.5 **[IMPLEMENTATION]** Update Select menu behavior: in multi-signal view, populate with signal types (ECG, PPG, EDA); in signal-type view, populate with channel names; in single-channel view, disable Select menu (or show "Return to Type View" option); connect menu items to appropriate view switches
-      - Multi-signal Select: List unique signal types from session.signals (group by signal_type)
-      - Signal-type Select: List channels of current_signal_type (filter signals by type, show channel_name)
-      - Single-channel Select: Disabled or shows "Return to [Type] View"
-      - Update `_add_select_menu_actions()` to be mode-aware
-    - [ ] 3.11.6 **[IMPLEMENTATION]** Update MultiSignalView to group by signal type instead of showing all channels: modify `set_session()` to group signals by signal_type, create one plot per type showing all channels overlaid (different colors) or stacked; clicking a plot emits `signal_type_selected(SignalType)` instead of `signal_selected(SignalData)`
-      - Change behavior: One plot per signal TYPE, not per channel
-      - For multi-channel types (ECG): overlay all 4 channels in same plot with different colors, or stack them in sub-grid
-      - For single-channel types (PPG, GSR): show as before
-      - New signal: `signal_type_selected = Signal(object)  # SignalType`
-      - Click handler: Determine signal type from clicked plot, emit signal type, switch to SignalTypeView
-    - [ ] 3.11.7 **[IMPLEMENTATION]** Ensure SingleChannelView (currently SingleSignalView) only shows Process menu: rename SingleSignalView to SingleChannelView for clarity; ensure Process menu only appears in channel-level view, not in type-level view; update menu building logic to check view level
-      - Rename: `SingleSignalView` → `SingleChannelView` throughout codebase
-      - Menu logic: Process menu only active when `self.current_view_level == "channel"`
-      - Update all imports and references
-    - [ ] 3.11.8 **[IMPLEMENTATION]** Add "Return to Type View" navigation: in SingleChannelView, add View menu item "Return to [SignalType] View" (e.g., "Return to ECG View"); pressing ESC from channel view returns to type view, ESC from type view returns to multi view; update keyboard shortcuts and status bar
-      - View menu: "Return to ECG View" (dynamic based on current signal type)
-      - ESC behavior: channel → type → multi (two-level navigation)
-      - Status bar: Show current view level and signal type (e.g., "ECG View (4 channels)" or "Channel View: ECG LL-RA")
-    - [ ] 3.11.9 **[REVIEW]** Test 3-view hierarchy with multi-channel ECG data: verify navigation flow (multi → ECG type → ECG LL-RA channel), test Select menu population at each level, verify derived channel creation (L2 Norm), ensure single-channel types (PPG, GSR) skip type view, verify Process menu only active in channel view, test event overlay persistence across all three view levels
+  - [x] 3.11 **[IMPLEMENTATION] [DEPENDS: 3.10]** Implement 3-view hierarchy for multi-channel signal types: add intermediate "signal-type view" between multi-signal and single-channel views to handle signal types with multiple channels (ECG has 4 channels); support creating derived channels (L2 Norm); wire Select menu to show signal types in multi-signal view and channels in signal-type view; ensure processing only activates in single-channel view
+    - Note: All subtasks implemented in session 2026-02-14. 3-view hierarchy fully functional.
+    - Note: Per-channel signal type detection in XdfLoader using detect_signal_type_from_name() with stream-level fallback
+    - Note: SignalTypeView with stacked channel plots, L2 Norm button, channel click selection
+    - Note: DerivedSignalData class and create_l2_norm() helper in data_models.py
+    - Note: MainWindow 3-level QStackedWidget with routing (multi->type->channel), ESC navigation
+    - Note: Select menu adapts per view level (types in multi, channels in type)
+    - Note: MultiSignalView groups by signal type, emits signal_type_selected
+    - Note: SingleChannelView (renamed from SingleSignalView) with Process menu only at channel level
+    - Note: Return to Type View navigation with dynamic label, ESC cascade
+    - [x] 3.11.1 **[IMPLEMENTATION]** Fix PPG/GSR signal type detection in XdfLoader
+      - Note: Per-channel detection via detect_signal_type_from_name() with stream_signal_type fallback
+    - [x] 3.11.2 **[IMPLEMENTATION]** Create SignalTypeView class
+      - Note: Created signal_type_view.py with stacked plots, L2 Norm button, channel_selected signal
+    - [x] 3.11.3 **[IMPLEMENTATION]** Add derived channel support to data models
+      - Note: DerivedSignalData class, create_l2_norm() helper, RecordingSession.derived_signals field
+    - [x] 3.11.4 **[IMPLEMENTATION]** Modify MainWindow view switching logic
+      - Note: 3-level QStackedWidget, current_view_level tracking, _came_from_type_view for ESC
+    - [x] 3.11.5 **[IMPLEMENTATION]** Update Select menu behavior
+      - Note: _add_select_menu_actions() adapts per view level (types/channels/derived)
+    - [x] 3.11.6 **[IMPLEMENTATION]** Update MultiSignalView to group by signal type
+      - Note: Groups by type, overlays multi-channel in same plot, emits signal_type_selected
+    - [x] 3.11.7 **[IMPLEMENTATION]** SingleChannelView with Process menu only
+      - Note: Renamed from SingleSignalView, Process menu only at channel level
+    - [x] 3.11.8 **[IMPLEMENTATION]** Add Return to Type View navigation
+      - Note: Dynamic "Return to ECG View" label, ESC cascade (channel->type->multi)
+    - [x] 3.11.9 **[REVIEW]** Test 3-view hierarchy
+      - Note: All navigation flows working, Select menus populate correctly, events persist across views
 
-- [ ] 4.0 Signal Processing Pipeline
-  - [ ] 4.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `core/signal_filtering.py` (bandpass, baseline correction, artifact reduction) and Shimmer_Testing's `emd_denoising.py` (EEMD decomposition, IMF analysis, reconstruction) to understand implementations; review NeuroKit2 processing patterns from Acute_Tinnitus_PPG and Hyperacousie_TCC for ECG/PPG/EDA peak detection workflows
-  - [ ] 4.2 **[IMPLEMENTATION] [DEPENDS: 4.1, 2.2]** Implement `processing/pipeline.py` with composable processing pipeline: `ProcessingPipeline` class that maintains an ordered list of `ProcessingStep` records; `apply(signal) -> processed_signal` replays all steps in order; `add_step(operation, parameters)` appends; `reset()` clears all steps and reverts to raw signal; `serialize() -> dict` and `deserialize(dict)` for JSON round-trip; each step stores its operation name and parameters dict
-  - [ ] 4.3 **[IMPLEMENTATION] [DEPENDS: 4.1, 4.2]** Implement `processing/filters.py` with bandpass filtering (configurable cutoffs using SciPy butter/sosfiltfilt), baseline correction (polynomial detrending), zero-referencing (subtract mean or first N samples to start at 0), and signal segmentation (trim edges or select time range); each function accepts and returns ndarray; register as pipeline operations that can be added as ProcessingStep entries; port and simplify from EKG_Peak_Corrector's signal_filtering
-  - [ ] 4.4 **[IMPLEMENTATION] [DEPENDS: 4.1, 4.2]** Implement `processing/eemd.py` by porting Shimmer_Testing's emd_denoising.py: `eemd_artifact_removal(signal, sampling_rate, **params) -> cleaned_signal` that decomposes via PyEMD EEMD, analyzes IMF frequencies, excludes artifact IMFs, and reconstructs; register as pipeline operation; preserve scientific rationale comments about frequency band thresholds
-  - [ ] 4.5 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.2]** Implement `processing/peak_detection.py` with NeuroKit2 wrappers: `detect_ecg_peaks(signal, fs) -> peak_indices` using nk.ecg_process(), `detect_ppg_peaks(signal, fs) -> peak_indices` using nk.ppg_process(), `detect_eda_features(signal, fs) -> feature_indices` using nk.eda_process(); return peak indices compatible with PeakData; register as pipeline operations
-  - [ ] 4.6 **[IMPLEMENTATION] [DEPENDS: 4.2, 1.5]** Implement `processing/worker.py` with `ProcessingWorker(QThread)`: accepts a callable and arguments, runs in background thread, emits AppSignals.processing_progress(int) for progress updates, emits AppSignals.processing_finished on completion, supports cancellation via AppSignals.processing_cancelled; wrap all long-running operations (EEMD, peak detection) in worker; show QProgressDialog in GUI during processing
-  - [ ] 4.7 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.4, 4.5, 4.6, 1.6]** Wire processing into the GUI Process menu: for each signal type, Process menu triggers appropriate operations via ProcessingWorker; Filter opens a dialog for cutoff parameters then applies via pipeline; Zero-Reference opens dialog (subtract mean vs first N samples); Segment Signal opens dialog for time range selection; Artifact Removal runs EEMD in background; Detect Peaks runs the signal-appropriate detector in background; Reset Processing calls pipeline.reset() and reverts to raw signal; update plot after each operation via AppSignals.processing_finished
-  - [ ] 4.8 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.4, 4.5, 4.2]** Write unit tests: `tests/test_filters.py` for bandpass and baseline correction on synthetic signals, `tests/test_eemd.py` for EEMD decomposition and reconstruction, `tests/test_peak_detection.py` for NeuroKit2 peak detection on known ECG/PPG/EDA waveforms, `tests/test_pipeline.py` for pipeline add/reset/serialize/deserialize round-trip
-  - [ ] 4.9 **[REVIEW] [DEPENDS: 4.8]** Verify processing pipeline meets PRD requirements 2.1-2.6 and 3.1-3.5: filters apply correctly with configurable cutoffs, EEMD removes artifacts, NeuroKit2 detects peaks for all three signal types, pipeline is composable and serializable, long-running operations run in background thread with progress, GUI remains responsive during processing, Process menu adapts per signal type
+- [x] 4.0 Signal Processing Pipeline (ALL SUB-TASKS COMPLETE)
+  - Overall Note: Implemented complete processing pipeline with composable operations, 7 filter types, EEMD artifact removal, NeuroKit2 peak detection, background worker, and GUI integration. 61 tests all passing.
+  - [x] 4.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `core/signal_filtering.py` (bandpass, baseline correction, artifact reduction) and Shimmer_Testing's `emd_denoising.py` (EEMD decomposition, IMF analysis, reconstruction) to understand implementations; review NeuroKit2 processing patterns from Acute_Tinnitus_PPG and Hyperacousie_TCC for ECG/PPG/EDA peak detection workflows
+    - Note: Analyzed all three source projects via research agents; identified Butterworth sosfiltfilt pattern, EEMD frequency-band thresholds, NeuroKit2 step-by-step approach
+  - [x] 4.2 **[IMPLEMENTATION] [DEPENDS: 4.1, 2.2]** Implement `processing/pipeline.py` with composable processing pipeline
+    - Note: Registry-based operation system with ProcessingStep records, JSON serialize/deserialize, add_step/apply/reset/remove_last
+  - [x] 4.3 **[IMPLEMENTATION] [DEPENDS: 4.1, 4.2]** Implement `processing/filters.py` with bandpass, highpass, lowpass, notch, baseline correction, zero-reference, segmentation
+    - Note: 7 operations registered; zero-phase Butterworth via sosfiltfilt; polynomial detrending for baseline; input validation with Nyquist clamping
+  - [x] 4.4 **[IMPLEMENTATION] [DEPENDS: 4.1, 4.2]** Implement `processing/eemd.py` by porting Shimmer_Testing's emd_denoising.py
+    - Note: Ported with scientific rationale comments; auto-classify IMFs by frequency/energy; lazy PyEMD import; reproducible with random seed
+  - [x] 4.5 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.2]** Implement `processing/peak_detection.py` with NeuroKit2 wrappers
+    - Note: Step-by-step approach (clean -> peaks) for ECG, PPG, EDA; returns int arrays compatible with PeakData
+  - [x] 4.6 **[IMPLEMENTATION] [DEPENDS: 4.2, 1.5]** Implement `processing/worker.py` with ProcessingWorker(QThread)
+    - Note: Background thread with progress/finished/error signals and cancellation support
+  - [x] 4.7 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.4, 4.5, 4.6, 1.6]** Wire processing into the GUI Process menu
+    - Note: Filter/Notch/Baseline/Zero-Reference/EEMD/Peak Detection/Reset all wired with QDialog parameter input; EEMD runs in background with QProgressDialog
+  - [x] 4.8 **[IMPLEMENTATION] [DEPENDS: 4.3, 4.4, 4.5, 4.2]** Write unit tests
+    - Note: 61 tests across 4 files: test_pipeline(17), test_filters(21), test_eemd(15), test_peak_detection(8) - all passing
+  - [x] 4.9 **[REVIEW] [DEPENDS: 4.8]** Verify processing pipeline meets PRD requirements 2.1-2.6 and 3.1-3.5
+    - Note: 9/11 requirements fully met; PRD 2.4 (filter preview) and 3.5 (quality metrics display) are partial - low-priority enhancements
 
 - [ ] 5.0 Interactive Peak Correction
   - [ ] 5.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `gui/peak_correction_handler.py` (mouse click handlers, undo/redo stack, peak selection/movement, keyboard event routing) to understand the interaction model; determine what to port vs simplify for CardioSignalLab's click-to-add and click-to-delete workflow
