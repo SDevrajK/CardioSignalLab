@@ -39,22 +39,35 @@ def detect_ecg_peaks(
     """
     import neurokit2 as nk
 
-    # Step 1: Clean ECG signal
-    ecg_cleaned = nk.ecg_clean(samples, sampling_rate=int(sampling_rate), method=clean_method)
+    try:
+        # Step 1: Clean ECG signal
+        ecg_cleaned = nk.ecg_clean(samples, sampling_rate=int(sampling_rate), method=clean_method)
 
-    # Step 2: Detect R-peaks
-    _, rpeaks = nk.ecg_peaks(ecg_cleaned, sampling_rate=int(sampling_rate), method=peak_method)
+        # Step 2: Detect R-peaks
+        _, rpeaks = nk.ecg_peaks(ecg_cleaned, sampling_rate=int(sampling_rate), method=peak_method)
 
-    peak_indices = rpeaks.get("ECG_R_Peaks", np.array([], dtype=int))
-    if peak_indices is None:
-        peak_indices = np.array([], dtype=int)
-    peak_indices = np.asarray(peak_indices, dtype=int)
+        peak_indices = rpeaks.get("ECG_R_Peaks", np.array([], dtype=int))
+        if peak_indices is None:
+            peak_indices = np.array([], dtype=int)
+        peak_indices = np.asarray(peak_indices, dtype=int)
 
-    logger.info(
-        f"ECG peak detection: {len(peak_indices)} R-peaks found "
-        f"(clean={clean_method}, detect={peak_method})"
-    )
-    return peak_indices
+        logger.info(
+            f"ECG peak detection: {len(peak_indices)} R-peaks found "
+            f"(clean={clean_method}, detect={peak_method})"
+        )
+
+        if len(peak_indices) < 3:
+            logger.warning(
+                f"Only {len(peak_indices)} peaks detected - may indicate signal quality issues "
+                f"or inappropriate parameters"
+            )
+
+        return peak_indices
+
+    except Exception as e:
+        logger.error(f"ECG peak detection failed: {e}")
+        logger.warning("Returning empty peak array - check signal quality and sampling rate")
+        return np.array([], dtype=int)
 
 
 def detect_ppg_peaks(
@@ -79,22 +92,35 @@ def detect_ppg_peaks(
     """
     import neurokit2 as nk
 
-    # Step 1: Clean PPG signal
-    ppg_cleaned = nk.ppg_clean(samples, sampling_rate=int(sampling_rate), method=clean_method)
+    try:
+        # Step 1: Clean PPG signal
+        ppg_cleaned = nk.ppg_clean(samples, sampling_rate=int(sampling_rate), method=clean_method)
 
-    # Step 2: Detect peaks
-    info = nk.ppg_findpeaks(ppg_cleaned, sampling_rate=int(sampling_rate), method=peak_method)
+        # Step 2: Detect peaks
+        info = nk.ppg_findpeaks(ppg_cleaned, sampling_rate=int(sampling_rate), method=peak_method)
 
-    peak_indices = info.get("PPG_Peaks", np.array([], dtype=int))
-    if peak_indices is None:
-        peak_indices = np.array([], dtype=int)
-    peak_indices = np.asarray(peak_indices, dtype=int)
+        peak_indices = info.get("PPG_Peaks", np.array([], dtype=int))
+        if peak_indices is None:
+            peak_indices = np.array([], dtype=int)
+        peak_indices = np.asarray(peak_indices, dtype=int)
 
-    logger.info(
-        f"PPG peak detection: {len(peak_indices)} peaks found "
-        f"(clean={clean_method}, detect={peak_method})"
-    )
-    return peak_indices
+        logger.info(
+            f"PPG peak detection: {len(peak_indices)} peaks found "
+            f"(clean={clean_method}, detect={peak_method})"
+        )
+
+        if len(peak_indices) < 3:
+            logger.warning(
+                f"Only {len(peak_indices)} peaks detected - may indicate signal quality issues "
+                f"or inappropriate parameters"
+            )
+
+        return peak_indices
+
+    except Exception as e:
+        logger.error(f"PPG peak detection failed: {e}")
+        logger.warning("Returning empty peak array - check signal quality and sampling rate")
+        return np.array([], dtype=int)
 
 
 def detect_eda_features(
@@ -119,19 +145,32 @@ def detect_eda_features(
     """
     import neurokit2 as nk
 
-    # Process EDA (clean + decompose + detect SCR peaks)
-    signals, info = nk.eda_process(samples, sampling_rate=int(sampling_rate), method=method)
+    try:
+        # Process EDA (clean + decompose + detect SCR peaks)
+        signals, info = nk.eda_process(samples, sampling_rate=int(sampling_rate), method=method)
 
-    peak_indices = info.get("SCR_Peaks", np.array([], dtype=int))
-    if peak_indices is None:
-        peak_indices = np.array([], dtype=int)
-    peak_indices = np.asarray(peak_indices, dtype=int)
+        peak_indices = info.get("SCR_Peaks", np.array([], dtype=int))
+        if peak_indices is None:
+            peak_indices = np.array([], dtype=int)
+        peak_indices = np.asarray(peak_indices, dtype=int)
 
-    # Filter out NaN values that NeuroKit2 sometimes returns
-    peak_indices = peak_indices[~np.isnan(peak_indices.astype(float))].astype(int)
+        # Filter out NaN values that NeuroKit2 sometimes returns
+        peak_indices = peak_indices[~np.isnan(peak_indices.astype(float))].astype(int)
 
-    logger.info(f"EDA feature detection: {len(peak_indices)} SCR peaks found")
-    return peak_indices
+        logger.info(f"EDA feature detection: {len(peak_indices)} SCR peaks found")
+
+        if len(peak_indices) == 0:
+            logger.warning(
+                "No SCR peaks detected - EDA signal may lack phasic responses "
+                "or may be too short/noisy"
+            )
+
+        return peak_indices
+
+    except Exception as e:
+        logger.error(f"EDA feature detection failed: {e}")
+        logger.warning("Returning empty peak array - check signal quality and sampling rate")
+        return np.array([], dtype=int)
 
 
 # Pipeline wrappers that return the processed signal unchanged but store peak

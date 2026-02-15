@@ -15,6 +15,50 @@ from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt
 from cardio_signal_lab.processing.pipeline import register_operation
 
 
+def detect_signal_dropouts(
+    timestamps: np.ndarray, sampling_rate: float, threshold_multiplier: float = 1.5
+) -> tuple[np.ndarray, float]:
+    """Detect signal dropouts (gaps in timestamps).
+
+    Args:
+        timestamps: Timestamp array in seconds
+        sampling_rate: Expected sampling rate in Hz
+        threshold_multiplier: Gap threshold as multiple of expected interval (default: 1.5)
+
+    Returns:
+        Tuple of (gap_indices, dropout_percentage):
+            - gap_indices: Indices where gaps occur (shape: (N,))
+            - dropout_percentage: Percentage of total duration that is dropout
+    """
+    if len(timestamps) < 2:
+        return np.array([], dtype=int), 0.0
+
+    # Calculate time differences
+    time_diffs = np.diff(timestamps)
+
+    # Expected interval between samples
+    expected_interval = 1.0 / sampling_rate
+
+    # Detect gaps (intervals larger than threshold)
+    gap_threshold = expected_interval * threshold_multiplier
+    gap_indices = np.where(time_diffs > gap_threshold)[0]
+
+    if len(gap_indices) == 0:
+        return gap_indices, 0.0
+
+    # Calculate dropout percentage
+    gap_durations = time_diffs[gap_indices] - expected_interval
+    total_gap_duration = np.sum(gap_durations)
+    total_duration = timestamps[-1] - timestamps[0]
+    dropout_percentage = 100.0 * total_gap_duration / total_duration if total_duration > 0 else 0.0
+
+    logger.debug(
+        f"Detected {len(gap_indices)} dropouts ({dropout_percentage:.2f}% of signal duration)"
+    )
+
+    return gap_indices, dropout_percentage
+
+
 def bandpass_filter(
     samples: np.ndarray,
     sampling_rate: float,

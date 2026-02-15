@@ -57,11 +57,21 @@ def eemd_decompose(
         f"ensemble_size={ensemble_size}, noise_width={noise_width}"
     )
 
-    all_imfs = eemd.eemd(signal, max_imf=max_imf)
+    try:
+        all_imfs = eemd.eemd(signal, max_imf=max_imf)
+    except Exception as e:
+        logger.error(f"EEMD decomposition failed: {e}")
+        raise ValueError(f"EEMD decomposition failed (signal may be too noisy or irregular): {e}")
+
+    if all_imfs.size == 0:
+        raise ValueError("EEMD produced no IMFs (signal may be constant or too short)")
 
     # Last row is the residue
     imfs = all_imfs[:-1]
     residue = all_imfs[-1]
+
+    if imfs.size == 0:
+        logger.warning("EEMD produced only residue, no IMFs extracted")
 
     logger.info(f"EEMD decomposition complete: {imfs.shape[0]} IMFs extracted")
     return imfs, residue

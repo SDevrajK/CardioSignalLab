@@ -86,17 +86,24 @@ class ProcessingPipeline:
         self.steps.append(step)
         logger.info(f"Added pipeline step: {operation} (params: {parameters})")
 
-    def apply(self, samples: np.ndarray, sampling_rate: float) -> np.ndarray:
+    def apply(
+        self, samples: np.ndarray, sampling_rate: float, *, skip_on_error: bool = False
+    ) -> np.ndarray:
         """Apply all pipeline steps in order to signal data.
 
         Args:
             samples: Raw signal samples (1D array)
             sampling_rate: Signal sampling rate in Hz
+            skip_on_error: If True, skip failed steps and continue; if False, raise on first error
 
         Returns:
-            Processed signal samples
+            Processed signal samples (partial results if skip_on_error=True)
+
+        Raises:
+            Exception: If a step fails and skip_on_error=False
         """
         result = samples.copy()
+        skipped_steps = []
 
         for i, step in enumerate(self.steps):
             try:
@@ -106,8 +113,22 @@ class ProcessingPipeline:
                     f"Pipeline step {i + 1}/{len(self.steps)}: {step.operation} applied"
                 )
             except Exception as e:
-                logger.error(f"Pipeline step {step.operation} failed: {e}")
-                raise
+                error_msg = (
+                    f"Pipeline step {i + 1}/{len(self.steps)} failed: {step.operation} "
+                    f"(params: {step.parameters}): {e}"
+                )
+                if skip_on_error:
+                    logger.warning(f"{error_msg} - skipping and continuing")
+                    skipped_steps.append((i + 1, step.operation, str(e)))
+                else:
+                    logger.error(error_msg)
+                    raise
+
+        if skipped_steps:
+            logger.warning(
+                f"Pipeline completed with {len(skipped_steps)} skipped steps: "
+                f"{[s[1] for s in skipped_steps]}"
+            )
 
         return result
 
