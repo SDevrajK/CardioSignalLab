@@ -41,6 +41,7 @@ from cardio_signal_lab.gui.multi_signal_view import MultiSignalView
 from cardio_signal_lab.gui.signal_type_view import SignalTypeView
 from cardio_signal_lab.gui.single_channel_view import SingleChannelView
 from cardio_signal_lab.gui.status_bar import AppStatusBar
+from cardio_signal_lab.gui.log_panel import LogPanel
 from cardio_signal_lab.processing import ProcessingPipeline, ProcessingWorker
 from cardio_signal_lab.signals import get_app_signals
 
@@ -102,6 +103,19 @@ class MainWindow(QMainWindow):
         # Status bar
         self.status_bar = AppStatusBar(self)
         self.setStatusBar(self.status_bar)
+
+        # Log panel (dockable)
+        self.log_panel = LogPanel(self)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.log_panel)
+        self.log_panel.hide()  # Hidden by default
+
+        # Register log panel with loguru
+        logger.add(
+            self.log_panel.get_loguru_sink(),
+            format="<lvl>{level}</lvl>|{message}",
+            level="INFO",
+            colorize=False,
+        )
 
         # Build initial menus
         self._build_menus()
@@ -375,6 +389,12 @@ class MainWindow(QMainWindow):
         toggle_events_action.setShortcut("E")
         toggle_events_action.triggered.connect(self._on_view_toggle_events)
         menu.addAction(toggle_events_action)
+
+        # Toggle log panel
+        toggle_log_action = QAction("Toggle Log Panel", self)
+        toggle_log_action.setShortcut("L")
+        toggle_log_action.triggered.connect(self._on_view_toggle_log)
+        menu.addAction(toggle_log_action)
 
         # Navigation back actions
         menu.addSeparator()
@@ -1381,6 +1401,15 @@ class MainWindow(QMainWindow):
         visible = view.are_events_visible()
         status = "visible" if visible else "hidden"
         self.statusBar().showMessage(f"Event markers {status}", 3000)
+
+    def _on_view_toggle_log(self):
+        """Toggle log panel visibility."""
+        if self.log_panel.isVisible():
+            self.log_panel.hide()
+            self.statusBar().showMessage("Log panel hidden", 3000)
+        else:
+            self.log_panel.show()
+            self.statusBar().showMessage("Log panel visible", 3000)
 
     # ---- Help Operations ----
 
