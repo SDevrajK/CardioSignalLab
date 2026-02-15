@@ -24,7 +24,19 @@ from PySide6.QtCore import Qt
 from loguru import logger
 
 from cardio_signal_lab.config import get_config, get_keysequence
-from cardio_signal_lab.core import get_loader, SignalType, CsvLoader, PeakData
+from cardio_signal_lab.core import (
+    get_loader,
+    SignalType,
+    CsvLoader,
+    PeakData,
+    PeakClassification,
+    save_session,
+    load_session,
+    export_csv,
+    export_npy,
+    export_annotations,
+    save_processing_parameters,
+)
 from cardio_signal_lab.gui.multi_signal_view import MultiSignalView
 from cardio_signal_lab.gui.signal_type_view import SignalTypeView
 from cardio_signal_lab.gui.single_channel_view import SingleChannelView
@@ -503,9 +515,9 @@ class MainWindow(QMainWindow):
 
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Open Physiological Signal File",
+            "Open Physiological Signal File or Session",
             str(Path.home()),
-            "Physiological Signal Files (*.xdf *.csv);;XDF Files (*.xdf);;CSV Files (*.csv);;All Files (*.*)",
+            "All Supported Files (*.xdf *.csv *.csl.json);;Session Files (*.csl.json);;Physiological Signal Files (*.xdf *.csv);;XDF Files (*.xdf);;CSV Files (*.csv);;All Files (*.*)",
         )
 
         if not file_path:
@@ -515,22 +527,27 @@ class MainWindow(QMainWindow):
         logger.info(f"Loading file: {path}")
 
         try:
-            if path.suffix.lower() == ".csv":
-                loader = CsvLoader(signal_type=SignalType.UNKNOWN, auto_detect_type=True)
+            # Check if it's a session file
+            if path.suffix.lower() == ".json" and path.name.endswith(".csl.json"):
+                self._load_session_file(path)
             else:
-                loader = get_loader(path)
+                # Load data file
+                if path.suffix.lower() == ".csv":
+                    loader = CsvLoader(signal_type=SignalType.UNKNOWN, auto_detect_type=True)
+                else:
+                    loader = get_loader(path)
 
-            session = loader.load(path)
-            self.current_session = session
+                session = loader.load(path)
+                self.current_session = session
 
-            self._show_metadata_dialog(session)
-            self.signals.file_loaded.emit(session)
+                self._show_metadata_dialog(session)
+                self.signals.file_loaded.emit(session)
 
-            # Go to multi-signal view
-            if self.current_view_level != "multi":
-                self._on_return_to_multi()
+                # Go to multi-signal view
+                if self.current_view_level != "multi":
+                    self._on_return_to_multi()
 
-            logger.info(f"File loaded: {session.num_signals} signals")
+                logger.info(f"File loaded: {session.num_signals} signals")
 
         except FileNotFoundError as e:
             logger.error(f"File not found: {e}")
@@ -541,6 +558,59 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.exception(f"Unexpected error loading file: {e}")
             QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n{e}")
+
+    def _load_session_file(self, path: Path):
+        """Load a .csl.json session file."""
+        try:
+            session_data = load_session(path)
+
+            # Load the source file
+            source_path = Path(session_data["source_file"])
+            if not source_path.exists():
+                QMessageBox.warning(
+                    self, "Source File Not Found",
+                    f"The session references a source file that no longer exists:\n{source_path}\n\nPlease locate the file manually."
+                )
+                return
+
+            # Load the data file
+            if source_path.suffix.lower() == ".csv":
+                loader = CsvLoader(signal_type=SignalType.UNKNOWN, auto_detect_type=True)
+            else:
+                loader = get_loader(source_path)
+
+            session = loader.load(source_path)
+            self.current_session = session
+
+            # Restore processing pipeline
+            pipeline_data = session_data.get("processing_pipeline", {})
+            if pipeline_data:
+                # Deserialize and apply to first signal (or user-selected signal)
+                # For now, we just log that we have pipeline data
+                logger.info(f"Session has {len(pipeline_data.get('steps', []))} processing steps")
+
+            # Restore peaks
+            peaks_data = session_data.get("peaks")
+            if peaks_data:
+                self._current_peaks = PeakData(
+                    indices=np.array(peaks_data["indices"], dtype=int),
+                    classifications=np.array(peaks_data["classifications"], dtype=int),
+                )
+                logger.info(f"Restored {self._current_peaks.num_peaks} peaks from session")
+
+            # Go to multi-signal view
+            self.signals.file_loaded.emit(session)
+            if self.current_view_level != "multi":
+                self._on_return_to_multi()
+
+            QMessageBox.information(
+                self, "Session Loaded",
+                f"Session loaded successfully.\n\nSource: {source_path.name}\nPeaks: {len(peaks_data['indices']) if peaks_data else 0}"
+            )
+
+        except Exception as e:
+            logger.exception(f"Failed to load session: {e}")
+            QMessageBox.critical(self, "Session Load Error", f"Failed to load session:\n{e}")
 
     def _show_metadata_dialog(self, session: RecordingSession):
         """Display file metadata in an info dialog."""
@@ -580,12 +650,181 @@ class MainWindow(QMainWindow):
         logger.debug(f"Session loaded: {session.num_signals} signals, {len(session.events)} events")
 
     def _on_file_save(self):
+        """Handle File > Save - save current session."""
         logger.info("File > Save triggered")
-        self.signals.file_save_requested.emit()
+
+        # Can only save if we have a session and are in channel view with processing
+        if self.current_session is None:
+            QMessageBox.warning(self, "No Session", "No session to save. Load a file first.")
+            return
+
+        if self.current_signal is None:
+            QMessageBox.warning(
+                self, "No Signal",
+                "Session save is only available when viewing a single signal.\n\nSelect a signal from the multi-signal or type view first."
+            )
+            return
+
+        # Get save path
+        default_name = self.current_session.source_path.stem + ".csl.json"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Session",
+            str(self.current_session.source_path.parent / default_name),
+            "Session Files (*.csl.json);;All Files (*.*)"
+        )
+
+        if not file_path:
+            return
+
+        path = Path(file_path)
+
+        try:
+            # Serialize pipeline
+            pipeline_data = self.pipeline.serialize()
+
+            # Get view state (current zoom/pan)
+            view_state = {}
+            if self.current_view_level == "channel":
+                plot = self.single_channel_view.plot_widget
+                x_min, x_max, y_min, y_max = plot.get_visible_range()
+                view_state = {
+                    "x_range": [x_min, x_max],
+                    "y_range": [y_min, y_max],
+                    "signal_type": self.current_signal.signal_type.value,
+                    "channel_name": self.current_signal.channel_name,
+                }
+
+            # Save session
+            save_session(
+                source_file=self.current_session.source_path,
+                pipeline_data=pipeline_data,
+                peaks=self._current_peaks,
+                output_path=path,
+                view_state=view_state,
+            )
+
+            self.statusBar().showMessage(f"Session saved to {path.name}", 5000)
+            logger.info(f"Session saved to {path}")
+
+        except Exception as e:
+            logger.exception(f"Failed to save session: {e}")
+            QMessageBox.critical(self, "Save Error", f"Failed to save session:\n{e}")
 
     def _on_file_export(self):
+        """Handle File > Export - export processed signal and peaks."""
         logger.info("File > Export triggered")
-        self.signals.file_export_requested.emit()
+
+        # Can only export from channel view
+        if self.current_signal is None:
+            QMessageBox.warning(
+                self, "No Signal",
+                "Export is only available when viewing a single signal.\n\nSelect a signal from the multi-signal or type view first."
+            )
+            return
+
+        # Show export format dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Export Signal")
+        layout = QFormLayout(dialog)
+
+        format_combo = QComboBox()
+        format_combo.addItems(["CSV", "NumPy Arrays (.npy)", "Annotations Only (CSV)"])
+        layout.addRow("Export format:", format_combo)
+
+        include_peaks_check = None
+        if format_combo.currentText() == "CSV":
+            from PySide6.QtWidgets import QCheckBox
+            include_peaks_check = QCheckBox()
+            include_peaks_check.setChecked(True)
+            layout.addRow("Include peaks:", include_peaks_check)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        export_format = format_combo.currentText()
+
+        # Get export path
+        if export_format == "CSV":
+            file_filter = "CSV Files (*.csv);;All Files (*.*)"
+            default_ext = ".csv"
+        elif export_format == "NumPy Arrays (.npy)":
+            file_filter = "NumPy Files (*.npy);;All Files (*.*)"
+            default_ext = "_signal.npy"
+        else:  # Annotations
+            file_filter = "CSV Files (*.csv);;All Files (*.*)"
+            default_ext = "_annotations.csv"
+
+        default_name = (
+            self.current_signal.channel_name.replace(" ", "_").lower() + default_ext
+        )
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Signal", default_name, file_filter
+        )
+
+        if not file_path:
+            return
+
+        path = Path(file_path)
+
+        try:
+            if export_format == "CSV":
+                include_peaks = include_peaks_check.isChecked() if include_peaks_check else True
+                export_csv(
+                    signal=self.current_signal,
+                    peaks=self._current_peaks,
+                    output_path=path,
+                    include_peaks=include_peaks,
+                )
+                self.statusBar().showMessage(f"Exported to CSV: {path.name}", 5000)
+
+            elif export_format == "NumPy Arrays (.npy)":
+                # Remove _signal.npy suffix for base path
+                base_path = path.parent / path.stem.replace("_signal", "")
+                export_npy(
+                    signal=self.current_signal,
+                    peaks=self._current_peaks,
+                    output_path=base_path,
+                )
+                self.statusBar().showMessage(f"Exported to NPY: {base_path.name}*", 5000)
+
+            else:  # Annotations
+                if self._current_peaks is None or self._current_peaks.num_peaks == 0:
+                    QMessageBox.warning(
+                        self, "No Peaks",
+                        "No peaks detected. Run Process > Detect Peaks first or add peaks manually."
+                    )
+                    return
+                export_annotations(
+                    signal=self.current_signal,
+                    peaks=self._current_peaks,
+                    output_path=path,
+                )
+                self.statusBar().showMessage(f"Exported annotations: {path.name}", 5000)
+
+            # Also save processing parameters as sidecar
+            if self.pipeline.num_steps > 0:
+                params_path = path.parent / (path.stem + "_processing.json")
+                save_processing_parameters(
+                    pipeline_steps=self.pipeline.steps,
+                    signal_type=self.current_signal.signal_type.value,
+                    sampling_rate=self.current_signal.sampling_rate,
+                    output_path=params_path,
+                )
+                logger.info(f"Saved processing parameters to {params_path}")
+
+            logger.info(f"Exported signal to {path}")
+
+        except Exception as e:
+            logger.exception(f"Failed to export: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export:\n{e}")
 
     # ---- Edit Operations ----
 
@@ -918,11 +1157,11 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-            # Create PeakData (all auto-detected, source=0)
-            sources = np.zeros(len(peak_indices), dtype=int)
+            # Create PeakData (all auto-detected, classification=AUTO)
+            classifications = np.full(len(peak_indices), PeakClassification.AUTO.value, dtype=int)
             self._current_peaks = PeakData(
                 indices=peak_indices.astype(int),
-                sources=sources,
+                classifications=classifications,
             )
 
             # Update peak overlay on single channel view
