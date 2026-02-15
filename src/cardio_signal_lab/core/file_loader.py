@@ -105,8 +105,21 @@ class XdfLoader:
             FileNotFoundError: If file doesn't exist
             ValueError: If XDF format is invalid
         """
+        # Layered validation: type → exists → format
+        if not isinstance(path, Path):
+            try:
+                path = Path(path)
+            except Exception:
+                raise TypeError(f"path must be a Path object or string, got {type(path).__name__}")
+
         if not path.exists():
             raise FileNotFoundError(f"XDF file not found: {path}")
+
+        if not path.is_file():
+            raise ValueError(f"Path is not a file: {path}")
+
+        if path.suffix.lower() != ".xdf":
+            raise ValueError(f"Invalid file extension, expected .xdf, got {path.suffix}")
 
         logger.info(f"Loading XDF file: {path}")
 
@@ -187,11 +200,20 @@ class XdfLoader:
         stream_name = stream["info"]["name"][0] if isinstance(stream["info"]["name"], list) else stream["info"]["name"]
         sampling_rate = float(stream["info"]["nominal_srate"][0])
 
+        # Validate sampling rate
+        if not self._validate_sampling_rate(sampling_rate, stream_name):
+            logger.error(f"Skipping stream '{stream_name}' due to invalid sampling rate")
+            return []
+
         # Detect signal type from stream metadata (used as fallback)
         stream_signal_type = self._detect_signal_type(stream["info"])
 
         # Extract timestamps (use device timestamps if available, otherwise LSL)
         timestamps = self._extract_timestamps(stream)
+
+        # Validate timestamps
+        if not self._validate_timestamps(timestamps, stream_name):
+            logger.warning(f"Timestamps not monotonic for '{stream_name}', but continuing load")
 
         # Extract channel names
         channel_names = self._extract_channel_names(stream["info"])
@@ -217,6 +239,11 @@ class XdfLoader:
                 if np.all(samples == 0) or np.all(np.isnan(samples)):
                     logger.debug(f"Skipping empty channel: {channel_name}")
                     continue
+
+                # Validate signal values
+                if not self._validate_signal_values(samples, channel_name):
+                    logger.warning(f"Signal '{channel_name}' failed validation, but including in session")
+                    # Continue anyway - validation warnings are informational
 
                 # Per-channel signal type detection (e.g., GSR vs PPG from same stream)
                 channel_type = detect_signal_type_from_name(channel_name)
@@ -384,6 +411,108 @@ class XdfLoader:
 
         return events
 
+    def _validate_sampling_rate(self, sampling_rate: float, stream_name: str) -> bool:
+        """Validate sampling rate is reasonable.
+
+        Args:
+            sampling_rate: Sampling rate in Hz
+            stream_name: Name of stream for error messages
+
+        Returns:
+            True if valid, False if suspicious (logs warning)
+        """
+        if sampling_rate <= 0:
+            logger.error(f"Invalid sampling rate for '{stream_name}': {sampling_rate} Hz (must be positive)")
+            return False
+
+        # Reasonable range for physiological signals
+        if sampling_rate < 16 or sampling_rate > 2000:
+            logger.warning(
+                f"Unusual sampling rate for '{stream_name}': {sampling_rate} Hz "
+                f"(expected 16-2000 Hz for physiological signals)"
+            )
+
+        return True
+
+    def _validate_timestamps(self, timestamps: np.ndarray, channel_name: str) -> bool:
+        """Validate timestamps are strictly increasing.
+
+        Args:
+            timestamps: Timestamp array
+            channel_name: Channel name for error messages
+
+        Returns:
+            True if valid, False if not monotonic
+        """
+        if len(timestamps) == 0:
+            return True
+
+        # Check for strictly increasing (allow some floating-point tolerance)
+        time_diffs = np.diff(timestamps)
+        if np.any(time_diffs <= 0):
+            non_monotonic_indices = np.where(time_diffs <= 0)[0]
+            logger.warning(
+                f"Timestamps not strictly increasing for '{channel_name}': "
+                f"{len(non_monotonic_indices)} non-monotonic jumps detected "
+                f"(first at index {non_monotonic_indices[0]})"
+            )
+            return False
+
+        return True
+
+    def _validate_signal_values(self, samples: np.ndarray, channel_name: str) -> bool:
+        """Validate signal values are reasonable.
+
+        Args:
+            samples: Signal samples
+            channel_name: Channel name for error messages
+
+        Returns:
+            True if valid, False if problematic (logs warning)
+        """
+        if len(samples) == 0:
+            logger.warning(f"Empty signal for '{channel_name}'")
+            return False
+
+        # Check for excessive NaN values
+        nan_count = np.sum(np.isnan(samples))
+        if nan_count > 0:
+            nan_pct = 100.0 * nan_count / len(samples)
+            if nan_pct > 50:
+                logger.warning(
+                    f"Signal '{channel_name}' has {nan_pct:.1f}% NaN values ({nan_count}/{len(samples)})"
+                )
+                return False
+            elif nan_pct > 10:
+                logger.warning(
+                    f"Signal '{channel_name}' has {nan_pct:.1f}% NaN values ({nan_count}/{len(samples)}), "
+                    f"consider checking data quality"
+                )
+
+        # Check for flat signal (constant value)
+        valid_samples = samples[~np.isnan(samples)]
+        if len(valid_samples) > 0:
+            if np.std(valid_samples) == 0:
+                logger.warning(
+                    f"Signal '{channel_name}' is constant (value={valid_samples[0]:.3f}), "
+                    f"may indicate sensor disconnection"
+                )
+                return False
+
+            # Check for extreme values (>1000 standard deviations from mean)
+            mean = np.mean(valid_samples)
+            std = np.std(valid_samples)
+            if std > 0:
+                extreme_mask = np.abs(valid_samples - mean) > 1000 * std
+                extreme_count = np.sum(extreme_mask)
+                if extreme_count > 0:
+                    logger.warning(
+                        f"Signal '{channel_name}' has {extreme_count} extreme outliers "
+                        f"(>1000σ from mean={mean:.2f}, σ={std:.2f})"
+                    )
+
+        return True
+
 
 class CsvLoader:
     """Loader for CSV files with time and signal columns.
@@ -423,8 +552,21 @@ class CsvLoader:
             FileNotFoundError: If file doesn't exist
             ValueError: If CSV format is invalid
         """
+        # Layered validation: type → exists → format
+        if not isinstance(path, Path):
+            try:
+                path = Path(path)
+            except Exception:
+                raise TypeError(f"path must be a Path object or string, got {type(path).__name__}")
+
         if not path.exists():
             raise FileNotFoundError(f"CSV file not found: {path}")
+
+        if not path.is_file():
+            raise ValueError(f"Path is not a file: {path}")
+
+        if path.suffix.lower() != ".csv":
+            raise ValueError(f"Invalid file extension, expected .csv, got {path.suffix}")
 
         logger.info(f"Loading CSV file: {path}")
 
@@ -504,12 +646,27 @@ class CsvLoader:
         timestamps = timestamps - timestamps[0]
 
         # Validate timestamps
-        if not np.all(np.diff(timestamps) > 0):
-            raise ValueError("Timestamps must be strictly increasing")
+        time_diffs = np.diff(timestamps)
+        if not np.all(time_diffs > 0):
+            non_monotonic_indices = np.where(time_diffs <= 0)[0]
+            raise ValueError(
+                f"Timestamps must be strictly increasing. Found {len(non_monotonic_indices)} "
+                f"non-monotonic jumps (first at row {non_monotonic_indices[0] + 4})"
+            )
 
         # Calculate sampling rate
-        mean_interval = np.mean(np.diff(timestamps))
+        mean_interval = np.mean(time_diffs)
         sampling_rate = 1.0 / mean_interval
+
+        # Validate sampling rate
+        if sampling_rate <= 0:
+            raise ValueError(f"Invalid sampling rate: {sampling_rate} Hz (must be positive)")
+
+        if sampling_rate < 16 or sampling_rate > 2000:
+            logger.warning(
+                f"Unusual sampling rate: {sampling_rate:.2f} Hz "
+                f"(expected 16-2000 Hz for physiological signals)"
+            )
 
         logger.info(f"Detected sampling rate: {sampling_rate:.2f} Hz (timestamps aligned to t=0)")
 
@@ -613,12 +770,27 @@ class CsvLoader:
         timestamps = timestamps - timestamps[0]
 
         # Validate timestamps
-        if not np.all(np.diff(timestamps) > 0):
-            raise ValueError("Timestamps must be strictly increasing")
+        time_diffs = np.diff(timestamps)
+        if not np.all(time_diffs > 0):
+            non_monotonic_indices = np.where(time_diffs <= 0)[0]
+            raise ValueError(
+                f"Timestamps must be strictly increasing. Found {len(non_monotonic_indices)} "
+                f"non-monotonic jumps (first at row {non_monotonic_indices[0] + 2})"
+            )
 
         # Calculate sampling rate from timestamps
-        mean_interval = np.mean(np.diff(timestamps))
+        mean_interval = np.mean(time_diffs)
         sampling_rate = 1.0 / mean_interval
+
+        # Validate sampling rate
+        if sampling_rate <= 0:
+            raise ValueError(f"Invalid sampling rate: {sampling_rate} Hz (must be positive)")
+
+        if sampling_rate < 16 or sampling_rate > 2000:
+            logger.warning(
+                f"Unusual sampling rate: {sampling_rate:.2f} Hz "
+                f"(expected 16-2000 Hz for physiological signals)"
+            )
 
         logger.info(f"Detected sampling rate: {sampling_rate:.2f} Hz (timestamps aligned to t=0)")
 
