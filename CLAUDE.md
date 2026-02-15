@@ -48,52 +48,53 @@ Code is being selectively ported from:
 ## Current Session Context
 <!-- Auto-managed by /save-context -->
 
-**Last Updated**: 2026-02-13
-**Session Focus**: Visualization implementation and PyQtGraph rendering bug resolution
-**Project Status**: Active development - visualization working, ready for signal processing tasks
-
-### Critical Bug RESOLVED ✓
-**Problem**: PlotDataItem and ScatterPlotItem did not render in PyQtGraph plots
-- **Root Cause**: PySide6 6.9.1 introduced a rendering bug that breaks PyQtGraph
-- **Solution**: Downgraded PySide6 from 6.9.1 → 6.9.0
-- **Source**: Found forum post describing identical issue with same versions
-- **Result**: All plots now render correctly with full functionality
-
-**Command to maintain fix**: `pip install pyside6==6.9.0` (do not upgrade to 6.9.1)
-
-### UI Improvement Identified
-**Issue**: With multiple stacked signals (6+ channels), plot titles above each plot consume too much vertical space
-**Suggested fix**: Move titles to y-axis labels instead of above plots
-**Status**: Documented for future UI polish phase
+**Last Updated**: 2026-02-15
+**Session Focus**: Export/session persistence and comprehensive error handling
+**Project Status**: Active development - Tasks 6.0 and 7.0 (partial) complete
 
 ### Completed This Session
-1. ✅ Implemented Parent Task 3.0: Visualization system
-   - MultiSignalView with synchronized stacked plots
-   - SingleSignalView for focused signal viewing
-   - PeakOverlay for interactive peak markers
-   - LOD rendering integration
-2. ✅ Fixed infinite feedback loop in ViewBox range updates
-3. ✅ Debugged and resolved PyQtGraph rendering issue
-4. ✅ Cleaned up debug code and restored production settings
-5. ✅ Re-enabled x-axis linking for synchronized zoom/pan
+1. ✅ **Task 6.0**: Export and Session Persistence (ALL SUBTASKS COMPLETE)
+   - Task 6.4: Wired export/session to GUI (File→Open .csl.json, File→Save, File→Export)
+   - Task 6.5: 22 unit tests (test_exporter.py, test_session.py) - 100% coverage
+   - Task 6.6: Verified 5/6 PRD requirements met (XDF re-export marked as future enhancement)
+2. ✅ **Task 7.1**: Researched error handling patterns from EKG_Peak_Corrector
+   - Documented 7 key patterns: layered validation, signal checks, gap detection, graceful fallback
+3. ✅ **Task 7.2**: Added input validation to file loaders
+   - Layered validation (type→exists→format), sampling rate validation (16-2000 Hz)
+   - Timestamp monotonicity checks, signal quality validation (flat signals, NaN, outliers)
+4. ✅ **Task 7.3**: Added error handling to processing pipeline
+   - Pipeline skip_on_error parameter for partial results
+   - Signal dropout detection utility (detect_signal_dropouts)
+   - EEMD/peak detection error wrapping with graceful failures
 
 ### Next Priority
-**Task 3.9**: Complete Parent Task 3.0 - Advanced Navigation Controls
-- Wire Ctrl+Plus/Minus keyboard shortcuts for programmatic zoom in/out
-- Add "Jump to Time" dialog in View menu
-- Implement next/previous peak navigation (arrow keys when peak selected)
-- Add zoom to selection (drag region, right-click → Zoom to Selection)
-- Add Home/End keys to jump to start/end of signal
-- Ensure all features work in both multi-signal and single-signal modes
+**Task 7.4**: Add GUI log panel
+- QTextEdit dock widget with loguru sink
+- Real-time display of warnings/errors
+- Toggle visibility via View menu
 
-**After 3.9 Complete**:
-**Parent Task 4.0**: Signal Processing Pipeline
-- Filtering (bandpass, notch)
-- Peak detection (ECG, PPG, EDA)
-- Artifact removal (EEMD)
-- NeuroKit2 integration
+**After 7.4**:
+- Task 7.5: Integration tests (pytest-qt workflow tests)
+- Task 7.6: Final review against all PRD requirements
 
-### Files Modified
-- `src/cardio_signal_lab/gui/plot_widget.py` - Rendering fixes, debug cleanup
-- `src/cardio_signal_lab/gui/multi_signal_view.py` - X-axis linking restored
-- `test_pyqtgraph_minimal.py`, `test_simple.py` - Diagnostic tests (can be moved to tests/)
+### Key Session Notes
+- 22 export/session tests passing with 100% coverage
+- 5/6 PRD export requirements fully implemented (CSV, NPY, Annotations, Parameters, Session)
+- XDF re-export (6.4) documented as optional future enhancement
+- Layered validation pattern adopted from EKG_Peak_Corrector research
+- Pipeline now supports graceful error handling with skip_on_error flag
+- Signal dropout detection utility added for quality monitoring
+
+### Files Modified This Session
+- `src/cardio_signal_lab/gui/main_window.py` - Export/session GUI integration
+- `src/cardio_signal_lab/core/exporter.py` - CSV/NPY/Annotations export (CREATED)
+- `src/cardio_signal_lab/core/session.py` - Session save/load (CREATED)
+- `src/cardio_signal_lab/core/file_loader.py` - Input validation
+- `src/cardio_signal_lab/processing/pipeline.py` - Error handling
+- `src/cardio_signal_lab/processing/filters.py` - Dropout detection utility
+- `src/cardio_signal_lab/processing/eemd.py` - Error wrapping
+- `src/cardio_signal_lab/processing/peak_detection.py` - Error wrapping
+- `tests/test_exporter.py` - 11 tests (CREATED)
+- `tests/test_session.py` - 11 tests (CREATED)
+- `docs/tasks/review-task-6-export.md` - Review document (CREATED)
+- `docs/research/error-handling-patterns.md` - Research notes (CREATED)
