@@ -294,8 +294,13 @@ class PeakEditor:
             logger.info("Nothing to redo")
             return False
 
-        # Save current state to undo stack
-        self._save_state()
+        # Save current state to undo stack (without clearing redo)
+        state = {
+            "indices": self.indices.copy(),
+            "classifications": self.classifications.copy(),
+            "selected_index": self.selected_index,
+        }
+        self.undo_stack.append(state)
 
         # Restore redo state
         state = self.redo_stack.pop()
