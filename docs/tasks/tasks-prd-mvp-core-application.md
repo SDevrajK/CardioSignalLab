@@ -372,6 +372,7 @@
     - Note: 9/11 requirements fully met; PRD 2.4 (filter preview) and 3.5 (quality metrics display) are partial - low-priority enhancements
 
 - [ ] 5.0 Interactive Peak Correction
+  - **Known Issue**: EventOverlay RuntimeWarning "Failed to disconnect sigRangeChanged" - harmless but should add connection check before disconnect (event_overlay.py:110)
   - [ ] 5.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `gui/peak_correction_handler.py` (mouse click handlers, undo/redo stack, peak selection/movement, keyboard event routing) to understand the interaction model; determine what to port vs simplify for CardioSignalLab's click-to-add and click-to-delete workflow
   - [ ] 5.2 **[IMPLEMENTATION] [DEPENDS: 5.1, 2.2]** Implement `processing/peak_correction.py` with the core correction logic: `PeakEditor` class that manages PeakData with add_peak(index, source='manual'), delete_peak(index), undo(), redo(); maintain a fixed-size (20 levels) undo stack using a deque of correction actions; reset stack on new file load; emit AppSignals.peaks_updated after each action
   - [ ] 5.3 **[IMPLEMENTATION] [DEPENDS: 5.2, 3.5, 3.7]** Wire peak correction into single_signal_view: left-click on signal (not near existing peak) calls add_peak at nearest signal sample; left-click on existing peak marker calls delete_peak; Delete key removes selected peak; Ctrl+Z/Ctrl+Y trigger undo/redo; each action emits AppSignals.peaks_updated which updates peak_overlay immediately (<50ms target)
