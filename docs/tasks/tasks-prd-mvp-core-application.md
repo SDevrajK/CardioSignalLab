@@ -371,11 +371,16 @@
   - [x] 4.9 **[REVIEW] [DEPENDS: 4.8]** Verify processing pipeline meets PRD requirements 2.1-2.6 and 3.1-3.5
     - Note: 9/11 requirements fully met; PRD 2.4 (filter preview) and 3.5 (quality metrics display) are partial - low-priority enhancements
 
-- [ ] 5.0 Interactive Peak Correction
+- [ ] 5.0 Interactive Peak Correction (IN PROGRESS: 3/6 subtasks complete)
   - **Known Issue**: EventOverlay RuntimeWarning "Failed to disconnect sigRangeChanged" - harmless but should add connection check before disconnect (event_overlay.py:110)
-  - [ ] 5.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `gui/peak_correction_handler.py` (mouse click handlers, undo/redo stack, peak selection/movement, keyboard event routing) to understand the interaction model; determine what to port vs simplify for CardioSignalLab's click-to-add and click-to-delete workflow
-  - [ ] 5.2 **[IMPLEMENTATION] [DEPENDS: 5.1, 2.2]** Implement `processing/peak_correction.py` with the core correction logic: `PeakEditor` class that manages PeakData with add_peak(index, source='manual'), delete_peak(index), undo(), redo(); maintain a fixed-size (20 levels) undo stack using a deque of correction actions; reset stack on new file load; emit AppSignals.peaks_updated after each action
-  - [ ] 5.3 **[IMPLEMENTATION] [DEPENDS: 5.2, 3.5, 3.7]** Wire peak correction into single_signal_view: left-click on signal (not near existing peak) calls add_peak at nearest signal sample; left-click on existing peak marker calls delete_peak; Delete key removes selected peak; Ctrl+Z/Ctrl+Y trigger undo/redo; each action emits AppSignals.peaks_updated which updates peak_overlay immediately (<50ms target)
+  - [x] 5.1 **[RESEARCH]** Analyze EKG_Peak_Corrector's `gui/peak_correction_handler.py`
+    - Note: Analyzed interaction model - ported double-click add, single-click select, hotkey classification, arrow navigation, undo/redo patterns
+  - [x] 5.2 **[IMPLEMENTATION] [DEPENDS: 5.1, 2.2]** Implement `processing/peak_correction.py`
+    - Note: Implemented PeakEditor with add_peak/delete_peak/classify_peak/navigate_peaks, 20-level undo/redo stack using deque
+    - Note: Updated PeakData to support 4 classifications (AUTO, MANUAL, ECTOPIC, BAD) instead of just sources
+  - [x] 5.3 **[IMPLEMENTATION] [DEPENDS: 5.2, 3.5, 3.7]** Wire peak correction into single_signal_view
+    - Note: Added double-click to add (MANUAL), click to select, Delete/Backspace to remove, D/M/E/B hotkeys to classify, arrow keys to navigate, Ctrl+Z/Y for undo/redo
+    - Note: Updated PeakOverlay to support 4-color classification system (blue=AUTO, green=MANUAL, orange=ECTOPIC, red=BAD, yellow=selected)
   - [ ] 5.4 **[IMPLEMENTATION] [DEPENDS: 5.3]** Ensure peak markers visually distinguish auto-detected (blue) from manually-added (green) peaks using peak_overlay; verify that undo/redo correctly restores marker colors and source tracking; ensure zooming/panning does not interfere with peak click targets
   - [ ] 5.5 **[IMPLEMENTATION] [DEPENDS: 5.2]** Write unit tests in `tests/test_peak_correction.py` for PeakEditor: add/delete peaks, undo/redo correctness, 20-level stack limit (verify oldest action dropped), stack reset on new data, source tracking (auto vs manual preserved through undo/redo)
   - [ ] 5.6 **[REVIEW] [DEPENDS: 5.5]** Verify peak correction meets PRD requirements 4.1-4.7: click-to-add works, click-to-delete works, updates are <50ms, undo/redo works with 20 levels, history resets on new file, auto vs manual peaks are visually distinct, zoom/pan works during correction

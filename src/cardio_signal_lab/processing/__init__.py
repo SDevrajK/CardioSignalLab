@@ -1,7 +1,7 @@
 """Signal processing modules for CardioSignalLab.
 
 Provides composable pipeline, filtering, EEMD artifact removal,
-NeuroKit2 peak detection, and background worker.
+NeuroKit2 peak detection, peak correction, and background worker.
 """
 
 from cardio_signal_lab.processing.pipeline import (
@@ -24,6 +24,7 @@ from cardio_signal_lab.processing.peak_detection import (
     detect_eda_features,
     detect_ppg_peaks,
 )
+from cardio_signal_lab.processing.peak_correction import PeakEditor
 from cardio_signal_lab.processing.worker import ProcessingWorker
 
 # Note: EEMD is imported lazily to avoid slow PyEMD import at startup.
@@ -47,6 +48,8 @@ __all__ = [
     "detect_ecg_peaks",
     "detect_ppg_peaks",
     "detect_eda_features",
+    # Peak correction
+    "PeakEditor",
     # Worker
     "ProcessingWorker",
 ]

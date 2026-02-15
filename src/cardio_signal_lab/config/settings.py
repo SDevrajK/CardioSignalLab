@@ -112,10 +112,12 @@ class GUIConfig:
     plot_background: str = field(default="white", validator=attrs.validators.instance_of(str))
     grid_alpha: float = field(default=0.3, validator=[attrs.validators.instance_of(float), nonnegative_float])
 
-    # Peak marker colors (scientific convention: blue=auto, green=manual)
-    peak_color_auto: str = field(default="blue", validator=attrs.validators.instance_of(str))
-    peak_color_manual: str = field(default="green", validator=attrs.validators.instance_of(str))
-    peak_color_selected: str = field(default="orange", validator=attrs.validators.instance_of(str))
+    # Peak marker colors (classification-based)
+    peak_color_auto: str = field(default="blue", validator=attrs.validators.instance_of(str))  # Auto-detected
+    peak_color_manual: str = field(default="green", validator=attrs.validators.instance_of(str))  # User-added
+    peak_color_ectopic: str = field(default="orange", validator=attrs.validators.instance_of(str))  # Ectopic beat
+    peak_color_bad: str = field(default="red", validator=attrs.validators.instance_of(str))  # Bad/artifact
+    peak_color_selected: str = field(default="yellow", validator=attrs.validators.instance_of(str))  # Selected highlight
 
     # Signal colors (high-contrast for accessibility)
     signal_color_ecg: str = field(default="#1f77b4", validator=attrs.validators.instance_of(str))  # Blue

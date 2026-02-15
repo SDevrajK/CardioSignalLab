@@ -32,6 +32,15 @@ class ProcessingState(Enum):
     CORRECTED = "corrected"
 
 
+class PeakClassification(Enum):
+    """Peak classification types for interactive editing."""
+
+    AUTO = 0  # Auto-detected (blue) - from NeuroKit2
+    MANUAL = 1  # Manually added (green) - user double-click
+    ECTOPIC = 2  # Ectopic beat (orange) - user marked
+    BAD = 3  # Bad/incorrect (red) - artifact
+
+
 def _validate_ndarray_1d(instance, attribute, value):
     """Validator: ensure value is a 1D numpy array."""
     if not isinstance(value, np.ndarray):
@@ -114,16 +123,24 @@ class TimestampInfo:
 
 @define
 class PeakData:
-    """Peak annotation data with undo/redo tracking."""
+    """Peak annotation data with classification tracking.
+
+    Stores peak indices and their classifications for interactive editing.
+    Classifications:
+    - AUTO (0): Auto-detected by NeuroKit2 (blue)
+    - MANUAL (1): User-added via double-click (green)
+    - ECTOPIC (2): User-marked ectopic beat (orange)
+    - BAD (3): User-marked as artifact (red)
+    """
 
     indices: np.ndarray = field(validator=_validate_ndarray_1d)
-    sources: np.ndarray = field(validator=_validate_ndarray_1d)  # 0=auto, 1=manual
+    classifications: np.ndarray = field(validator=_validate_ndarray_1d)  # PeakClassification values
 
     def __attrs_post_init__(self):
-        """Validate indices and sources have same length."""
-        if len(self.indices) != len(self.sources):
+        """Validate indices and classifications have same length."""
+        if len(self.indices) != len(self.classifications):
             raise ValueError(
-                f"indices ({len(self.indices)}) and sources ({len(self.sources)}) must have same length"
+                f"indices ({len(self.indices)}) and classifications ({len(self.classifications)}) must have same length"
             )
 
     @property
@@ -134,12 +151,22 @@ class PeakData:
     @property
     def num_auto(self) -> int:
         """Number of auto-detected peaks."""
-        return int(np.sum(self.sources == 0))
+        return int(np.sum(self.classifications == PeakClassification.AUTO.value))
 
     @property
     def num_manual(self) -> int:
         """Number of manually-added peaks."""
-        return int(np.sum(self.sources == 1))
+        return int(np.sum(self.classifications == PeakClassification.MANUAL.value))
+
+    @property
+    def num_ectopic(self) -> int:
+        """Number of ectopic peaks."""
+        return int(np.sum(self.classifications == PeakClassification.ECTOPIC.value))
+
+    @property
+    def num_bad(self) -> int:
+        """Number of bad/incorrect peaks."""
+        return int(np.sum(self.classifications == PeakClassification.BAD.value))
 
 
 @define

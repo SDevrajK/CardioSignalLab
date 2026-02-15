@@ -4,6 +4,7 @@ from .data_models import (
     ChannelInfo,
     DerivedSignalData,
     EventData,
+    PeakClassification,
     PeakData,
     ProcessingState,
     ProcessingStep,
@@ -18,6 +19,7 @@ from .file_loader import CsvLoader, XdfLoader, detect_signal_type_from_name, get
 __all__ = [
     "SignalType",
     "ProcessingState",
+    "PeakClassification",
     "ChannelInfo",
     "TimestampInfo",
     "EventData",
