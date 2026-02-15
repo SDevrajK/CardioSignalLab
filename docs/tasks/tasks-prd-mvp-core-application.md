@@ -389,7 +389,12 @@
   - [x] 5.6 **[REVIEW] [DEPENDS: 5.5]** Verify peak correction meets PRD requirements 4.1-4.7
     - Note: All 7 requirements fully met - double-click add, Delete key remove, <100ms updates, 20-level undo/redo, history reset, 4-color distinction, zoom/pan during correction
 
-- [ ] 6.0 Export, Session Persistence, and Reproducibility
+- [ ] 6.0 Export, Session Persistence, and Reproducibility (IN PROGRESS: 2/6 subtasks complete)
+  - [x] 6.1 **[RESEARCH]** Export patterns review (skipped - used standard CSV/NPY/JSON patterns)
+  - [x] 6.2 **[IMPLEMENTATION]** Implement core/exporter.py with export_csv, export_npy, export_annotations, save_processing_parameters
+    - Note: CSV format: time_s, signal, peak, peak_classification; NPY: separate files for signal/peaks/classifications; Annotations: CSV with peak_index/time/amplitude/classification
+  - [x] 6.3 **[IMPLEMENTATION]** Implement core/session.py with save_session/load_session for JSON session files
+    - Note: Session stores: source_file path, processing_pipeline (serialized), peaks (indices + classifications), view_state
   - [ ] 6.1 **[RESEARCH]** Review export patterns from EKG_Peak_Corrector and Hyperacousie_TCC to understand what data gets exported (signal values, peak indices, timestamps, RR intervals); determine best CSV column format and annotation file structure for downstream analysis compatibility; design JSON session file schema for save/resume
   - [ ] 6.2 **[IMPLEMENTATION] [DEPENDS: 6.1, 2.2, 5.2, 4.2]** Implement `core/exporter.py` with export functions: `export_csv(signal, peaks, path)` writes time/signal_value/peak_marker columns; `export_npy(signal, peaks, path)` saves NumPy arrays; `export_annotations(peaks, path)` writes peak times as a standalone file; `export_xdf(session, path)` writes back to XDF with corrected annotations; each export also calls `save_parameters()` to write a JSON sidecar containing the serialized ProcessingPipeline, signal type, sampling rate, and software version
   - [ ] 6.3 **[IMPLEMENTATION] [DEPENDS: 6.1, 2.2, 4.2, 5.2]** Implement `core/session.py` with `save_session(session, peaks, pipeline, view_state, path)` that writes a JSON session file containing: source file path, processing pipeline (serialized ProcessingStep list), corrected peak data (indices + sources), and current view state (zoom range, selected signal); implement `load_session(path) -> tuple` that reads the JSON, reloads the source file, replays the processing pipeline, and restores peaks and view state
