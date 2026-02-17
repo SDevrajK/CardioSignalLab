@@ -48,17 +48,27 @@ class PeakOverlay:
         self.plot_widget = plot_widget
         self.config = get_config()
 
-        # Create scatter plot item for markers
+        # Main scatter: all peaks rendered by classification color.
+        # Only updated when peak data changes (add/delete/classify/reset).
         self.scatter = pg.ScatterPlotItem()
         self.scatter.setSize(self._SIZE_DEFAULT)
-        self.scatter.setPxMode(True)  # Size in pixels, not data coordinates
+        self.scatter.setPxMode(True)
 
-        # Add to plot
+        # Selection scatter: a single point drawn on top to highlight the selected peak.
+        # Updated on every navigation step — touching only one point is far cheaper than
+        # re-rendering the full scatter on each arrow-key press.
+        self._selected_scatter = pg.ScatterPlotItem()
+        self._selected_scatter.setSize(self._SIZE_DEFAULT + 2)
+        self._selected_scatter.setPxMode(True)
+
+        # Add to plot (selection scatter on top)
         if hasattr(plot_widget, 'plotItem'):
             plot_widget.plotItem.addItem(self.scatter)
+            plot_widget.plotItem.addItem(self._selected_scatter)
             self._viewbox = plot_widget.plotItem.getViewBox()
         else:
             plot_widget.addItem(self.scatter)
+            plot_widget.addItem(self._selected_scatter)
             self._viewbox = plot_widget.getViewBox()
 
         # Data storage
@@ -92,6 +102,7 @@ class PeakOverlay:
             self._SIZE_MAX,
         ))
         self.scatter.setSize(size)
+        self._selected_scatter.setSize(min(size + 2, self._SIZE_MAX))
 
     def set_peaks(self, signal: SignalData, peaks: PeakData):
         """Display peaks on signal.
@@ -108,26 +119,25 @@ class PeakOverlay:
         (x_min, x_max), _ = self._viewbox.viewRange()
         self._on_range_changed(self._viewbox, ((x_min, x_max), (0, 1)))
 
+        # Clear selection overlay — peak data is being replaced
+        self._selected_scatter.setData([], [])
+        self.selected_index = None
+
         if peaks.num_peaks == 0:
-            # No peaks to display
             self.scatter.setData([], [])
             logger.debug("No peaks to display")
             return
 
-        # Get peak times and amplitudes
         peak_times = signal.timestamps[peaks.indices]
         peak_amps = signal.samples[peaks.indices]
-
-        # Get colors based on classification
         colors = self._get_peak_colors(peaks.classifications)
 
-        # Update scatter plot
         self.scatter.setData(
             x=peak_times,
             y=peak_amps,
             brush=colors,
             symbol='o',
-            data=np.arange(len(peaks.indices))  # Store indices for click handling
+            data=np.arange(len(peaks.indices))
         )
 
         logger.info(
@@ -208,36 +218,34 @@ class PeakOverlay:
         logger.debug(f"Removed peak at index {peak_index}")
 
     def select_peak(self, peak_index: int | None):
-        """Select a peak (highlight it with selected color).
+        """Select a peak by highlighting it with the selected color.
+
+        Only updates the lightweight _selected_scatter (one point) so that
+        arrow-key navigation does not trigger a full re-render of all peaks.
 
         Args:
             peak_index: Index in peak array to select, or None to clear selection
         """
         self.selected_index = peak_index
 
-        if self.peak_data is None or self.signal_data is None:
-            return
-
         if peak_index is None:
-            # Clear selection - restore normal colors
-            self.set_peaks(self.signal_data, self.peak_data)
+            self._selected_scatter.setData([], [])
             logger.debug("Peak selection cleared")
             return
 
-        # Highlight selected peak
-        peak_times = self.signal_data.timestamps[self.peak_data.indices]
-        peak_amps = self.signal_data.samples[self.peak_data.indices]
+        if self.signal_data is None or self.peak_data is None:
+            return
 
-        colors = self._get_peak_colors(self.peak_data.classifications)
-        # Override selected peak color with highlight
-        colors[peak_index] = pg.mkBrush(self.config.gui.peak_color_selected)
+        sample = self.peak_data.indices[peak_index]
+        t = float(self.signal_data.timestamps[sample])
+        amp = float(self.signal_data.samples[sample])
 
-        self.scatter.setData(
-            x=peak_times,
-            y=peak_amps,
-            brush=colors,
+        self._selected_scatter.setData(
+            x=[t],
+            y=[amp],
+            brush=pg.mkBrush(self.config.gui.peak_color_selected),
             symbol='o',
-            data=np.arange(len(self.peak_data.indices))
+            data=[peak_index],
         )
 
         logger.debug(f"Selected peak {peak_index}")
@@ -265,9 +273,11 @@ class PeakOverlay:
     def clear(self):
         """Clear all peak markers."""
         self.scatter.setData([], [])
+        self._selected_scatter.setData([], [])
         self.signal_data = None
         self.peak_data = None
         self.selected_index = None
+        self._full_x_range = 0.0
 
         logger.debug("PeakOverlay cleared")
 

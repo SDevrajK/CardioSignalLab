@@ -191,13 +191,17 @@ class SingleChannelView(QWidget):
         elif key == Qt.Key.Key_Left and no_mods:
             new_idx = self.peak_editor.navigate_peaks("prev")
             if new_idx is not None:
-                self._refresh_overlay(emit=False)
+                # Only the selection changes — update the lightweight overlay directly
+                # instead of calling _refresh_overlay (which re-renders all peaks).
+                if self.peak_overlay is not None:
+                    self.peak_overlay.select_peak(new_idx)
                 self._scroll_to_peak(new_idx)
 
         elif key == Qt.Key.Key_Right and no_mods:
             new_idx = self.peak_editor.navigate_peaks("next")
             if new_idx is not None:
-                self._refresh_overlay(emit=False)
+                if self.peak_overlay is not None:
+                    self.peak_overlay.select_peak(new_idx)
                 self._scroll_to_peak(new_idx)
 
         elif key == Qt.Key.Key_D and no_mods:
