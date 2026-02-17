@@ -181,6 +181,9 @@ class MultiSignalView(QWidget):
             event: Mouse click event
             signal_type: SignalType associated with clicked plot
         """
+        from PySide6.QtCore import Qt
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
         logger.info(f"Signal type selected from multi-view: {signal_type.value}")
         self.signal_type_selected.emit(signal_type)
         self.app_signals.signal_type_selected.emit(signal_type)

@@ -1,19 +1,24 @@
-"""Single-channel view for detailed signal processing and correction.
+"""Single-channel view for detailed signal processing and peak correction.
 
-Displays one channel prominently in a full-size plot with interactive features
-for peak correction (clicking to add/delete peaks). Provides zoom/pan via
-mouse wheel and drag.
+Displays one channel prominently in a full-size plot with fully interactive
+peak correction: double-click to add peaks, click to select, Delete to remove,
+arrow keys to navigate, D/M/E/B to classify, Ctrl+Z/Y to undo/redo.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 from loguru import logger
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from cardio_signal_lab.core import PeakClassification, PeakData
 from cardio_signal_lab.gui.event_overlay import EventOverlay
+from cardio_signal_lab.gui.peak_overlay import PeakOverlay
 from cardio_signal_lab.gui.plot_widget import SignalPlotWidget
+from cardio_signal_lab.processing.peak_correction import PeakEditor
 from cardio_signal_lab.signals import get_app_signals
 
 if TYPE_CHECKING:
@@ -21,217 +26,276 @@ if TYPE_CHECKING:
 
 
 class SingleChannelView(QWidget):
-    """Single-signal view for detailed processing and peak correction.
-
-    Displays one signal in a full-size plot with interactive features:
-    - Zoom/pan with mouse wheel and drag
-    - Click to add/delete peaks (to be implemented in peak correction task)
-    - Keyboard shortcuts for navigation
+    """Single-channel view for processing and interactive peak correction.
 
     Signals:
-        return_to_multi_requested: Emitted when user wants to return to multi-signal mode
+        return_to_multi_requested: User wants to return to multi-signal mode.
+        peaks_changed: Emitted after any peak edit (add/delete/classify/undo/redo).
     """
 
     return_to_multi_requested = Signal()
+    peaks_changed = Signal(object)  # PeakData
 
     def __init__(self, parent=None):
-        """Initialize single-signal view.
-
-        Args:
-            parent: Parent QWidget
-        """
         super().__init__(parent=parent)
 
         self.app_signals = get_app_signals()
         self.signal_data: SignalData | None = None
-        self.event_overlay: EventOverlay | None = None  # Event overlay for this plot
-        self.session_events: list = []  # Store session events
+        self.session_events: list = []
 
-        # Create layout
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.peak_editor: PeakEditor | None = None
+        self.peak_overlay: PeakOverlay | None = None
+        self.event_overlay: EventOverlay | None = None
 
-        # Create plot widget (will occupy full size)
+        # Accept keyboard focus so keyPressEvent fires
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         self.plot_widget = SignalPlotWidget()
-        self.layout.addWidget(self.plot_widget)
+        layout.addWidget(self.plot_widget)
 
-        # Create event overlay
         self.event_overlay = EventOverlay(self.plot_widget)
 
-        # Connect signals
-        self._connect_signals()
+        # Connect scene-level mouse clicks (double-click to add peaks)
+        self.plot_widget.scene().sigMouseClicked.connect(self._on_scene_clicked)
 
         logger.debug("SingleChannelView initialized")
 
-    def _connect_signals(self):
-        """Connect to app signals."""
-        # Will add peak correction signals later
-        pass
+    # ---- Signal Display ----
 
     def set_signal(self, signal: SignalData):
-        """Set signal to display.
-
-        Args:
-            signal: SignalData to display
-        """
+        """Display a signal. Clears any existing peaks."""
         self.signal_data = signal
         self.plot_widget.set_signal(signal)
 
-        # Re-apply events after signal is set (in case they were cleared)
         if self.session_events:
-            logger.debug(f"Re-applying {len(self.session_events)} events after set_signal")
             self.event_overlay.set_events(self.session_events)
 
         logger.info(
-            f"Single-signal view loaded: {signal.signal_type.value}, "
-            f"{signal.channel_name}, {len(signal.samples)} samples"
+            f"Single-channel view: {signal.signal_type.value} / {signal.channel_name} "
+            f"({len(signal.samples)} samples)"
         )
 
     def clear(self):
-        """Clear plot and reset to empty state."""
         self.plot_widget.clear()
         self.signal_data = None
+        self.clear_peaks()
 
-        logger.debug("SingleChannelView cleared")
+    # ---- Peak Correction ----
+
+    def set_peaks(self, peaks: PeakData):
+        """Initialize the peak editor and overlay with detected peaks."""
+        self.peak_editor = PeakEditor(peaks)
+
+        if self.peak_overlay is None:
+            self.peak_overlay = PeakOverlay(self.plot_widget)
+            # Sync selection clicks to the editor
+            self.peak_overlay.scatter.sigClicked.connect(self._on_overlay_peak_clicked)
+
+        self._refresh_overlay(emit=False)
+        self.setFocus()
+
+    def clear_peaks(self):
+        """Remove all peak markers and reset the editor."""
+        self.peak_editor = None
+        if self.peak_overlay is not None:
+            self.peak_overlay.clear()
+
+    def undo(self):
+        """Undo last peak edit."""
+        if self.peak_editor and self.peak_editor.undo():
+            self._refresh_overlay()
+
+    def redo(self):
+        """Redo last undone peak edit."""
+        if self.peak_editor and self.peak_editor.redo():
+            self._refresh_overlay()
+
+    def _refresh_overlay(self, emit: bool = True):
+        """Sync editor state to overlay and optionally notify listeners."""
+        if self.peak_editor is None or self.signal_data is None or self.peak_overlay is None:
+            return
+
+        peak_data = self.peak_editor.get_peak_data()
+        self.peak_overlay.set_peaks(self.signal_data, peak_data)
+
+        if self.peak_editor.selected_index is not None:
+            self.peak_overlay.select_peak(self.peak_editor.selected_index)
+
+        if emit:
+            self.peaks_changed.emit(peak_data)
+
+    # ---- Mouse Events ----
+
+    def _on_scene_clicked(self, event):
+        """Double-click on signal background adds a new peak."""
+        if self.peak_editor is None or self.signal_data is None:
+            return
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if not event.double():
+            return
+
+        # Map scene position to signal data coordinates
+        view_box = self.plot_widget.plotItem.getViewBox()
+        data_pos = view_box.mapSceneToView(event.scenePos())
+        time_clicked = data_pos.x()
+
+        timestamps = self.signal_data.timestamps
+        sample_idx = int(np.clip(
+            np.searchsorted(timestamps, time_clicked),
+            0, len(timestamps) - 1
+        ))
+
+        # Ignore double-clicks very close to an existing peak (treat as selection)
+        tolerance = int(0.05 * self.signal_data.sampling_rate)  # 50 ms
+        if self.peak_editor.find_nearest_peak(sample_idx, max_distance=tolerance) is not None:
+            return
+
+        if self.peak_editor.add_peak(sample_idx):
+            self._refresh_overlay()
+            logger.info(f"Added peak at sample {sample_idx} (t={time_clicked:.3f}s)")
+
+        event.accept()
+
+    def _on_overlay_peak_clicked(self, scatter, points):
+        """Sync peak selection from overlay click to the editor."""
+        if not points or self.peak_editor is None:
+            return
+        peak_index = int(points[0].data())
+        self.peak_editor.select_peak(peak_index)
+        self.peak_overlay.select_peak(peak_index)
+        self.setFocus()  # Regrab keyboard focus after mouse click
+
+    # ---- Keyboard Events ----
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if self.peak_editor is None:
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        mods = event.modifiers()
+        no_mods = mods == Qt.KeyboardModifier.NoModifier
+        ctrl = mods == Qt.KeyboardModifier.ControlModifier
+
+        selected = self.peak_editor.selected_index
+
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and no_mods:
+            if selected is not None:
+                self.peak_editor.delete_peak(selected)
+                self._refresh_overlay()
+
+        elif key == Qt.Key.Key_Left and no_mods:
+            new_idx = self.peak_editor.navigate_peaks("prev")
+            if new_idx is not None:
+                self._refresh_overlay(emit=False)
+                self._scroll_to_peak(new_idx)
+
+        elif key == Qt.Key.Key_Right and no_mods:
+            new_idx = self.peak_editor.navigate_peaks("next")
+            if new_idx is not None:
+                self._refresh_overlay(emit=False)
+                self._scroll_to_peak(new_idx)
+
+        elif key == Qt.Key.Key_D and no_mods:
+            if selected is not None:
+                self.peak_editor.classify_peak(selected, PeakClassification.AUTO)
+                self._refresh_overlay()
+
+        elif key == Qt.Key.Key_M and no_mods:
+            if selected is not None:
+                self.peak_editor.classify_peak(selected, PeakClassification.MANUAL)
+                self._refresh_overlay()
+
+        elif key == Qt.Key.Key_E and no_mods:
+            if selected is not None:
+                self.peak_editor.classify_peak(selected, PeakClassification.ECTOPIC)
+                self._refresh_overlay()
+
+        elif key == Qt.Key.Key_B and no_mods:
+            if selected is not None:
+                self.peak_editor.classify_peak(selected, PeakClassification.BAD)
+                self._refresh_overlay()
+
+        elif key == Qt.Key.Key_Z and ctrl:
+            self.undo()
+
+        elif key == Qt.Key.Key_Y and ctrl:
+            self.redo()
+
+        else:
+            super().keyPressEvent(event)
+
+    def _scroll_to_peak(self, peak_idx: int):
+        """Center view on the given peak without changing zoom level."""
+        if self.signal_data is None or self.peak_editor is None:
+            return
+        sample = self.peak_editor.indices[peak_idx]
+        peak_time = self.signal_data.timestamps[sample]
+        self.jump_to_time(peak_time)
+
+    # ---- Events Display ----
+
+    def set_events(self, events: list):
+        self.session_events = events
+        if self.event_overlay:
+            self.event_overlay.set_events(events)
+
+    def toggle_events(self):
+        if self.event_overlay:
+            self.event_overlay.toggle_visibility()
+
+    def set_events_visible(self, visible: bool):
+        if self.event_overlay:
+            self.event_overlay.set_visible(visible)
+
+    def are_events_visible(self) -> bool:
+        return self.event_overlay.is_visible() if self.event_overlay else False
+
+    # ---- Navigation ----
 
     def reset_view(self):
-        """Reset view to show full signal range."""
         self.plot_widget.reset_view()
 
     def get_visible_range(self) -> tuple[float, float, float, float]:
-        """Get current visible range.
-
-        Returns:
-            Tuple of (x_min, x_max, y_min, y_max)
-        """
         return self.plot_widget.get_visible_range()
 
     def zoom_in(self):
-        """Zoom in on plot (centered on current view)."""
-        view_box = self.plot_widget.plotItem.getViewBox()
-        view_box.scaleBy((0.5, 0.5))
-        logger.debug("Zoomed in")
+        self.plot_widget.plotItem.getViewBox().scaleBy((0.5, 0.5))
 
     def zoom_out(self):
-        """Zoom out on plot (centered on current view)."""
-        view_box = self.plot_widget.plotItem.getViewBox()
-        view_box.scaleBy((2.0, 2.0))
-        logger.debug("Zoomed out")
+        self.plot_widget.plotItem.getViewBox().scaleBy((2.0, 2.0))
 
     def enable_mouse_interaction(self, enabled: bool = True):
-        """Enable or disable mouse interaction.
-
-        Args:
-            enabled: True to enable mouse pan/zoom, False to disable
-        """
-        view_box = self.plot_widget.plotItem.getViewBox()
-        view_box.setMouseEnabled(x=enabled, y=enabled)
-        logger.debug(f"Mouse interaction {'enabled' if enabled else 'disabled'}")
+        self.plot_widget.plotItem.getViewBox().setMouseEnabled(x=enabled, y=enabled)
 
     def get_signal_data(self) -> SignalData | None:
-        """Get current signal data.
-
-        Returns:
-            Current SignalData or None if no signal loaded
-        """
         return self.signal_data
 
-    def set_events(self, events: list):
-        """Set events to display on plot.
-
-        Args:
-            events: List of EventData objects
-        """
-        logger.info(f"SingleChannelView.set_events() called with {len(events)} events")
-        self.session_events = events
-        if self.event_overlay:
-            logger.debug(f"EventOverlay exists, calling set_events")
-            self.event_overlay.set_events(events)
-            logger.debug(f"EventOverlay now has {self.event_overlay.get_num_events()} events")
-        else:
-            logger.warning("EventOverlay is None in set_events!")
-        logger.info(f"Set {len(events)} events on single signal view")
-
-    def toggle_events(self):
-        """Toggle event overlay visibility."""
-        if self.event_overlay:
-            self.event_overlay.toggle_visibility()
-            visible = self.event_overlay.is_visible()
-            logger.debug(f"Toggled events: {'visible' if visible else 'hidden'}")
-
-    def set_events_visible(self, visible: bool):
-        """Set event overlay visibility.
-
-        Args:
-            visible: True to show events, False to hide
-        """
-        if self.event_overlay:
-            self.event_overlay.set_visible(visible)
-            logger.debug(f"Set events visibility: {visible}")
-
-    def are_events_visible(self) -> bool:
-        """Check if events are currently visible.
-
-        Returns:
-            True if events are visible, False otherwise
-        """
-        return self.event_overlay.is_visible() if self.event_overlay else False
-
     def jump_to_start(self):
-        """Jump to start of signal."""
         if self.plot_widget.lod_renderer is None:
             return
-
         x_min, x_max, _, _ = self.plot_widget.lod_renderer.get_full_range()
-        duration = x_max - x_min
-
-        # Show first 10% of signal (or 10 seconds, whichever is smaller)
-        view_width = min(duration * 0.1, 10.0)
-
-        view_box = self.plot_widget.plotItem.getViewBox()
-        view_box.setXRange(x_min, x_min + view_width, padding=0)
-
-        logger.debug(f"Jumped to signal start: [{x_min:.2f}, {x_min + view_width:.2f}]")
+        view_width = min((x_max - x_min) * 0.1, 10.0)
+        self.plot_widget.plotItem.getViewBox().setXRange(x_min, x_min + view_width, padding=0)
 
     def jump_to_end(self):
-        """Jump to end of signal."""
         if self.plot_widget.lod_renderer is None:
             return
-
         x_min, x_max, _, _ = self.plot_widget.lod_renderer.get_full_range()
-        duration = x_max - x_min
-
-        # Show last 10% of signal (or 10 seconds, whichever is smaller)
-        view_width = min(duration * 0.1, 10.0)
-
-        view_box = self.plot_widget.plotItem.getViewBox()
-        view_box.setXRange(x_max - view_width, x_max, padding=0)
-
-        logger.debug(f"Jumped to signal end: [{x_max - view_width:.2f}, {x_max:.2f}]")
+        view_width = min((x_max - x_min) * 0.1, 10.0)
+        self.plot_widget.plotItem.getViewBox().setXRange(x_max - view_width, x_max, padding=0)
 
     def jump_to_time(self, time: float):
-        """Jump to specific timestamp and center view on it.
-
-        Args:
-            time: Timestamp to jump to (in seconds)
-        """
         if self.plot_widget.lod_renderer is None:
             return
-
         x_min, x_max, _, _ = self.plot_widget.lod_renderer.get_full_range()
-
-        # Clamp time to valid range
         time = max(x_min, min(x_max, time))
-
-        # Get current view width to maintain zoom level
         current_x_min, current_x_max, _, _ = self.plot_widget.get_visible_range()
         view_width = current_x_max - current_x_min
-
-        # Center on requested time
-        new_x_min = time - view_width / 2
-        new_x_max = time + view_width / 2
-
-        view_box = self.plot_widget.plotItem.getViewBox()
-        view_box.setXRange(new_x_min, new_x_max, padding=0)
-
-        logger.debug(f"Jumped to time {time:.2f}s")
+        self.plot_widget.plotItem.getViewBox().setXRange(
+            time - view_width / 2, time + view_width / 2, padding=0
+        )

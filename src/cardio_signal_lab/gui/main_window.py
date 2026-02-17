@@ -42,6 +42,7 @@ from cardio_signal_lab.gui.signal_type_view import SignalTypeView
 from cardio_signal_lab.gui.single_channel_view import SingleChannelView
 from cardio_signal_lab.gui.status_bar import AppStatusBar
 from cardio_signal_lab.gui.log_panel import LogPanel
+from cardio_signal_lab.gui.processing_panel import ProcessingPanel
 from cardio_signal_lab.processing import ProcessingPipeline, ProcessingWorker
 from cardio_signal_lab.signals import get_app_signals
 
@@ -117,6 +118,11 @@ class MainWindow(QMainWindow):
             colorize=False,
         )
 
+        # Processing panel (dockable, right side)
+        self.processing_panel = ProcessingPanel(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.processing_panel)
+        self.processing_panel.hide()  # Hidden by default
+
         # Build initial menus
         self._build_menus()
 
@@ -124,6 +130,7 @@ class MainWindow(QMainWindow):
         self.multi_signal_view.signal_type_selected.connect(self._on_signal_type_selected)
         self.signal_type_view.channel_selected.connect(self._on_channel_selected)
         self.single_channel_view.return_to_multi_requested.connect(self._on_return_to_multi)
+        self.single_channel_view.peaks_changed.connect(self._on_peaks_changed)
 
         # Connect app signals
         self.signals.mode_changed.connect(self._on_mode_changed)
@@ -164,12 +171,19 @@ class MainWindow(QMainWindow):
         self._add_help_menu_actions(help_menu)
 
     def _build_type_menus(self):
-        """Menus for signal-type view: File, Edit(disabled), Select(channels), View, Help."""
+        """Menus for signal-type view: File, Edit(disabled), Process(derive), Select, View, Help."""
         file_menu = self.menuBar().addMenu("&File")
         self._add_file_menu_actions(file_menu)
 
         edit_menu = self.menuBar().addMenu("&Edit")
         edit_menu.setEnabled(False)
+
+        # Process menu: only show when >=2 channels (L2 Norm requires multiple channels)
+        if len(self.signal_type_view.signals) >= 2:
+            process_menu = self.menuBar().addMenu("&Process")
+            l2_action = QAction("Create &L2 Norm Channel...", self)
+            l2_action.triggered.connect(self._on_type_create_l2_norm)
+            process_menu.addAction(l2_action)
 
         select_menu = self.menuBar().addMenu("&Select")
         self._add_select_menu_actions(select_menu)
@@ -233,18 +247,6 @@ class MainWindow(QMainWindow):
         redo_action.triggered.connect(self._on_edit_redo)
         menu.addAction(redo_action)
 
-        menu.addSeparator()
-
-        add_peak_action = QAction("&Add Peak", self)
-        add_peak_action.setShortcut(get_keysequence("edit_add_peak"))
-        add_peak_action.triggered.connect(self._on_edit_add_peak)
-        menu.addAction(add_peak_action)
-
-        delete_peak_action = QAction("&Delete Peak", self)
-        delete_peak_action.setShortcut(get_keysequence("edit_delete_peak"))
-        delete_peak_action.triggered.connect(self._on_edit_delete_peak)
-        menu.addAction(delete_peak_action)
-
     def _add_select_menu_actions(self, menu):
         """Add Select menu actions - context-dependent on view level."""
         if self.current_view_level == "multi":
@@ -288,34 +290,85 @@ class MainWindow(QMainWindow):
                 menu.addAction(placeholder)
 
     def _add_process_menu_actions(self, menu):
-        """Add Process menu actions (channel view only)."""
+        """Add Process menu actions, adapted to the current signal type.
+
+        Menu structure varies by signal type:
+        - ECG: Filters (Bandpass, Notch, Baseline, Zero-Ref) | NeuroKit2 > (Detect R-Peaks)
+        - PPG: Filters | EEMD Artifact Removal | NeuroKit2 > (Detect Pulse Peaks)
+        - EDA: Filters (Bandpass, Baseline, Zero-Ref) | NeuroKit2 > (Clean, Decompose, Detect SCR)
+        """
+        if self.current_signal is None:
+            return
+
+        sig_type = self.current_signal.signal_type
+
+        # --- Generic signal filters (all types) ---
         filter_action = QAction("&Bandpass Filter...", self)
         filter_action.triggered.connect(self._on_process_filter)
         menu.addAction(filter_action)
 
-        notch_action = QAction("&Notch Filter...", self)
-        notch_action.triggered.connect(self._on_process_notch)
-        menu.addAction(notch_action)
-
-        baseline_action = QAction("Baseline &Correction...", self)
+        baseline_action = QAction("&Detrend (Polynomial)...", self)
         baseline_action.triggered.connect(self._on_process_baseline)
         menu.addAction(baseline_action)
 
-        zero_ref_action = QAction("&Zero-Reference...", self)
+        zero_ref_action = QAction("&DC Offset Removal...", self)
         zero_ref_action.triggered.connect(self._on_process_zero_reference)
         menu.addAction(zero_ref_action)
 
+        # Notch filter: ECG and PPG only (EDA is low-frequency; notch is not useful)
+        if sig_type in (SignalType.ECG, SignalType.PPG):
+            notch_action = QAction("&Notch Filter...", self)
+            notch_action.triggered.connect(self._on_process_notch)
+            menu.addAction(notch_action)
+
         menu.addSeparator()
 
-        artifact_action = QAction("&Artifact Removal (EEMD)...", self)
-        artifact_action.triggered.connect(self._on_process_artifact_removal)
-        menu.addAction(artifact_action)
+        # --- Artifact removal: PPG only (EEMD algorithm is PPG-specific) ---
+        if sig_type == SignalType.PPG:
+            artifact_action = QAction("&Artifact Removal (EEMD)...", self)
+            artifact_action.triggered.connect(self._on_process_artifact_removal)
+            menu.addAction(artifact_action)
+            menu.addSeparator()
 
-        menu.addSeparator()
+        # --- NeuroKit2 submenu ---
+        nk_menu = menu.addMenu("&NeuroKit2")
 
-        detect_peaks_action = QAction("&Detect Peaks", self)
-        detect_peaks_action.triggered.connect(self._on_process_detect_peaks)
-        menu.addAction(detect_peaks_action)
+        if sig_type == SignalType.ECG:
+            clean_action = QAction("&Clean Signal", self)
+            clean_action.triggered.connect(self._on_nk_ecg_clean)
+            nk_menu.addAction(clean_action)
+
+            detect_action = QAction("Detect &R-Peaks", self)
+            detect_action.triggered.connect(self._on_process_detect_peaks)
+            nk_menu.addAction(detect_action)
+
+        elif sig_type == SignalType.PPG:
+            clean_action = QAction("&Clean Signal", self)
+            clean_action.triggered.connect(self._on_nk_ppg_clean)
+            nk_menu.addAction(clean_action)
+
+            detect_action = QAction("Detect &Pulse Peaks", self)
+            detect_action.triggered.connect(self._on_process_detect_peaks)
+            nk_menu.addAction(detect_action)
+
+        elif sig_type == SignalType.EDA:
+            clean_action = QAction("&Clean Signal", self)
+            clean_action.triggered.connect(self._on_nk_eda_clean)
+            nk_menu.addAction(clean_action)
+
+            decompose_action = QAction("&Decompose EDA...", self)
+            decompose_action.triggered.connect(self._on_nk_eda_decompose)
+            nk_menu.addAction(decompose_action)
+
+            detect_action = QAction("Detect &SCR Peaks", self)
+            detect_action.triggered.connect(self._on_process_detect_peaks)
+            nk_menu.addAction(detect_action)
+
+        else:
+            # UNKNOWN type: offer generic peak detection with a warning
+            detect_action = QAction("&Detect Peaks (generic)", self)
+            detect_action.triggered.connect(self._on_process_detect_peaks)
+            nk_menu.addAction(detect_action)
 
         menu.addSeparator()
 
@@ -395,6 +448,12 @@ class MainWindow(QMainWindow):
         toggle_log_action.setShortcut("L")
         toggle_log_action.triggered.connect(self._on_view_toggle_log)
         menu.addAction(toggle_log_action)
+
+        # Toggle processing steps panel
+        toggle_processing_action = QAction("Toggle Processing Panel", self)
+        toggle_processing_action.setShortcut("K")
+        toggle_processing_action.triggered.connect(self._on_view_toggle_processing)
+        menu.addAction(toggle_processing_action)
 
         # Navigation back actions
         menu.addSeparator()
@@ -480,6 +539,8 @@ class MainWindow(QMainWindow):
         self.pipeline.reset()
         self._raw_samples = None
         self._current_peaks = None
+        self.single_channel_view.clear_peaks()
+        self.processing_panel.clear()
 
         self.single_channel_view.set_signal(signal)
 
@@ -849,16 +910,15 @@ class MainWindow(QMainWindow):
     # ---- Edit Operations ----
 
     def _on_edit_undo(self):
-        logger.info("Edit > Undo triggered")
+        self.single_channel_view.undo()
 
     def _on_edit_redo(self):
-        logger.info("Edit > Redo triggered")
+        self.single_channel_view.redo()
 
-    def _on_edit_add_peak(self):
-        logger.info("Edit > Add Peak triggered")
-
-    def _on_edit_delete_peak(self):
-        logger.info("Edit > Delete Peak triggered")
+    def _on_peaks_changed(self, peak_data):
+        """Sync peak data from the editor back to MainWindow state."""
+        self._current_peaks = peak_data
+        self.signals.peaks_updated.emit(peak_data)
 
     # ---- Process Operations ----
 
@@ -883,6 +943,7 @@ class MainWindow(QMainWindow):
             self.single_channel_view.set_events(self.current_session.events or [])
 
         n_steps = self.pipeline.num_steps
+        self.processing_panel.update_steps(self.pipeline.steps)
         self.statusBar().showMessage(f"Processing applied ({n_steps} steps)", 3000)
 
     def _on_process_filter(self):
@@ -994,13 +1055,19 @@ class MainWindow(QMainWindow):
         self._apply_pipeline_and_update()
 
     def _on_process_baseline(self):
-        """Handle Process > Baseline Correction."""
+        """Handle Process > Detrend (Polynomial)."""
         if self.current_signal is None:
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Baseline Correction")
+        dialog.setWindowTitle("Detrend (Polynomial)")
         layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel(
+            "Fits a polynomial to the signal and subtracts it,\n"
+            "removing slow baseline drift (respiration, electrode motion).\n"
+            "Order 1 = linear detrend, order 3 = cubic detrend."
+        ))
 
         order_spin = QSpinBox()
         order_spin.setRange(1, 10)
@@ -1022,13 +1089,20 @@ class MainWindow(QMainWindow):
         self._apply_pipeline_and_update()
 
     def _on_process_zero_reference(self):
-        """Handle Process > Zero-Reference."""
+        """Handle Process > DC Offset Removal."""
         if self.current_signal is None:
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Zero-Reference")
+        dialog.setWindowTitle("DC Offset Removal")
         layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel(
+            "Removes a constant offset from the signal.\n"
+            "'mean': subtracts the signal mean (centers around zero).\n"
+            "'first_n': subtracts the mean of the first N samples (useful\n"
+            "when the signal starts at a known baseline)."
+        ))
 
         method_combo = QComboBox()
         method_combo.addItems(["mean", "first_n"])
@@ -1136,6 +1210,7 @@ class MainWindow(QMainWindow):
             self.single_channel_view.set_signal(self.current_signal)
             if self.current_session:
                 self.single_channel_view.set_events(self.current_session.events or [])
+            self.processing_panel.update_steps(self.pipeline.steps)
             self.statusBar().showMessage("EEMD artifact removal complete", 5000)
             logger.info("EEMD artifact removal applied to signal")
 
@@ -1148,6 +1223,144 @@ class MainWindow(QMainWindow):
         worker.error.connect(on_error)
         progress.canceled.connect(worker.cancel)
         worker.start()
+
+    def _on_nk_ecg_clean(self):
+        """Apply NeuroKit2 ECG-specific cleaning."""
+        if self.current_signal is None:
+            return
+
+        import neurokit2 as nk
+
+        self._ensure_raw_backup()
+        try:
+            cleaned = nk.ecg_clean(
+                self.current_signal.samples,
+                sampling_rate=int(self.current_signal.sampling_rate),
+            )
+            self.pipeline.add_step("ecg_clean", {})
+            object.__setattr__(self.current_signal, "samples", cleaned)
+            self.single_channel_view.set_signal(self.current_signal)
+            if self.current_session:
+                self.single_channel_view.set_events(self.current_session.events or [])
+            self.processing_panel.update_steps(self.pipeline.steps)
+            self.statusBar().showMessage("ECG cleaned (NeuroKit2)", 3000)
+            logger.info("Applied nk.ecg_clean()")
+        except Exception as e:
+            logger.error(f"ECG clean failed: {e}")
+            QMessageBox.critical(self, "Error", f"ECG cleaning failed:\n{e}")
+
+    def _on_nk_ppg_clean(self):
+        """Apply NeuroKit2 PPG-specific cleaning."""
+        if self.current_signal is None:
+            return
+
+        import neurokit2 as nk
+
+        self._ensure_raw_backup()
+        try:
+            cleaned = nk.ppg_clean(
+                self.current_signal.samples,
+                sampling_rate=int(self.current_signal.sampling_rate),
+            )
+            self.pipeline.add_step("ppg_clean", {})
+            object.__setattr__(self.current_signal, "samples", cleaned)
+            self.single_channel_view.set_signal(self.current_signal)
+            if self.current_session:
+                self.single_channel_view.set_events(self.current_session.events or [])
+            self.processing_panel.update_steps(self.pipeline.steps)
+            self.statusBar().showMessage("PPG cleaned (NeuroKit2)", 3000)
+            logger.info("Applied nk.ppg_clean()")
+        except Exception as e:
+            logger.error(f"PPG clean failed: {e}")
+            QMessageBox.critical(self, "Error", f"PPG cleaning failed:\n{e}")
+
+    def _on_nk_eda_clean(self):
+        """Apply NeuroKit2 EDA-specific cleaning (lowpass + smoothing)."""
+        if self.current_signal is None:
+            return
+
+        import neurokit2 as nk
+
+        self._ensure_raw_backup()
+        try:
+            cleaned = nk.eda_clean(
+                self.current_signal.samples,
+                sampling_rate=int(self.current_signal.sampling_rate),
+            )
+            self.pipeline.add_step("eda_clean", {})
+            object.__setattr__(self.current_signal, "samples", cleaned)
+            self.single_channel_view.set_signal(self.current_signal)
+            if self.current_session:
+                self.single_channel_view.set_events(self.current_session.events or [])
+            self.processing_panel.update_steps(self.pipeline.steps)
+            self.statusBar().showMessage("EDA cleaned (NeuroKit2)", 3000)
+            logger.info("Applied nk.eda_clean()")
+        except Exception as e:
+            logger.error(f"EDA clean failed: {e}")
+            QMessageBox.critical(self, "Error", f"EDA cleaning failed:\n{e}")
+
+    def _on_nk_eda_decompose(self):
+        """Decompose EDA into tonic/phasic components using NeuroKit2.
+
+        Replaces the current signal with the selected component so it can be
+        processed further or used for SCR peak detection.
+        """
+        if self.current_signal is None:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Decompose EDA")
+        layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel("Decompose EDA into tonic (SCL) and phasic (SCR) components."))
+        layout.addRow(QLabel("The selected component replaces the current signal."))
+
+        component_combo = QComboBox()
+        component_combo.addItems(["Phasic (SCR)", "Tonic (SCL)"])
+        layout.addRow("Keep component:", component_combo)
+
+        method_combo = QComboBox()
+        method_combo.addItems(["highpass", "cvxEDA", "sparse"])
+        layout.addRow("Decomposition method:", method_combo)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        component = "phasic" if component_combo.currentIndex() == 0 else "tonic"
+        method = method_combo.currentText()
+
+        import neurokit2 as nk
+
+        self._ensure_raw_backup()
+        try:
+            signals_df, _ = nk.eda_process(
+                self.current_signal.samples,
+                sampling_rate=int(self.current_signal.sampling_rate),
+                method=method,
+            )
+            col = "EDA_Phasic" if component == "phasic" else "EDA_Tonic"
+            result = signals_df[col].to_numpy()
+
+            self.pipeline.add_step("eda_decompose", {"component": component, "method": method})
+            object.__setattr__(self.current_signal, "samples", result)
+            self.single_channel_view.set_signal(self.current_signal)
+            if self.current_session:
+                self.single_channel_view.set_events(self.current_session.events or [])
+            self.processing_panel.update_steps(self.pipeline.steps)
+            self.statusBar().showMessage(
+                f"EDA decomposed: showing {component} component ({method})", 5000
+            )
+            logger.info(f"Applied nk.eda_process(): component={component}, method={method}")
+        except Exception as e:
+            logger.error(f"EDA decompose failed: {e}")
+            QMessageBox.critical(self, "Error", f"EDA decomposition failed:\n{e}")
 
     def _on_process_detect_peaks(self):
         """Handle Process > Detect Peaks."""
@@ -1184,16 +1397,8 @@ class MainWindow(QMainWindow):
                 classifications=classifications,
             )
 
-            # Update peak overlay on single channel view
-            if not hasattr(self.single_channel_view, 'peak_overlay'):
-                from cardio_signal_lab.gui.peak_overlay import PeakOverlay
-                self.single_channel_view.peak_overlay = PeakOverlay(
-                    self.single_channel_view.plot_widget
-                )
-            self.single_channel_view.peak_overlay.set_peaks(
-                self.current_signal, self._current_peaks
-            )
-
+            # Initialize interactive peak editor + overlay
+            self.single_channel_view.set_peaks(self._current_peaks)
             self.signals.peaks_updated.emit(self._current_peaks)
             self.statusBar().showMessage(
                 f"Detected {len(peak_indices)} peaks ({sig_type.value.upper()})", 5000
@@ -1223,6 +1428,7 @@ class MainWindow(QMainWindow):
         if self.current_session:
             self.single_channel_view.set_events(self.current_session.events or [])
 
+        self.processing_panel.clear()
         self.statusBar().showMessage("Processing reset to raw signal", 3000)
         logger.info("Processing pipeline reset")
 
@@ -1410,6 +1616,73 @@ class MainWindow(QMainWindow):
         else:
             self.log_panel.show()
             self.statusBar().showMessage("Log panel visible", 3000)
+
+    def _on_view_toggle_processing(self):
+        """Toggle processing steps panel visibility."""
+        if self.processing_panel.isVisible():
+            self.processing_panel.hide()
+            self.statusBar().showMessage("Processing panel hidden", 3000)
+        else:
+            self.processing_panel.show()
+            self.statusBar().showMessage("Processing panel visible", 3000)
+
+    # ---- Type-View Operations ----
+
+    def _on_type_create_l2_norm(self):
+        """Handle Process > Create L2 Norm Channel from the signal-type view.
+
+        Shows a channel selection dialog so the user can choose which channels
+        to include in the norm computation.
+        """
+        signals = self.signal_type_view.signals
+        if len(signals) < 2:
+            return
+
+        from PySide6.QtWidgets import QListWidget, QListWidgetItem
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Create L2 Norm Channel")
+        layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel(
+            "Select the channels to include in the L2 Norm.\n"
+            "L2 Norm = sqrt(sum of squares across selected channels)."
+        ))
+
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        for signal in signals:
+            item = QListWidgetItem(signal.channel_name)
+            item.setSelected(True)  # Pre-select all
+            list_widget.addItem(item)
+        layout.addRow("Channels:", list_widget)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selected_indices = [list_widget.row(item) for item in list_widget.selectedItems()]
+        if len(selected_indices) < 2:
+            QMessageBox.warning(self, "Selection", "Select at least 2 channels for L2 Norm.")
+            return
+
+        selected_signals = [signals[i] for i in selected_indices]
+
+        try:
+            self.signal_type_view.add_l2_norm(selected_signals)
+            self._build_menus()  # Refresh Select menu to include derived channel
+            self.statusBar().showMessage(
+                f"L2 Norm channel created from {len(selected_signals)} channels", 5000
+            )
+        except Exception as e:
+            logger.error(f"L2 Norm creation failed: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to create L2 Norm:\n{e}")
 
     # ---- Help Operations ----
 

@@ -201,3 +201,35 @@ def _pipeline_detect_eda_features(samples, sampling_rate, **params):
 register_operation("detect_ecg_peaks", _pipeline_detect_ecg_peaks)
 register_operation("detect_ppg_peaks", _pipeline_detect_ppg_peaks)
 register_operation("detect_eda_features", _pipeline_detect_eda_features)
+
+
+def _pipeline_ecg_clean(samples, sampling_rate, **params):
+    """Pipeline wrapper for nk.ecg_clean()."""
+    import neurokit2 as nk
+    return nk.ecg_clean(samples, sampling_rate=int(sampling_rate))
+
+
+def _pipeline_ppg_clean(samples, sampling_rate, **params):
+    """Pipeline wrapper for nk.ppg_clean()."""
+    import neurokit2 as nk
+    return nk.ppg_clean(samples, sampling_rate=int(sampling_rate))
+
+
+def _pipeline_eda_clean(samples, sampling_rate, **params):
+    """Pipeline wrapper for nk.eda_clean()."""
+    import neurokit2 as nk
+    return nk.eda_clean(samples, sampling_rate=int(sampling_rate))
+
+
+def _pipeline_eda_decompose(samples, sampling_rate, component="phasic", method="highpass", **params):
+    """Pipeline wrapper for nk.eda_process() - returns the selected component."""
+    import neurokit2 as nk
+    signals_df, _ = nk.eda_process(samples, sampling_rate=int(sampling_rate), method=method)
+    col = "EDA_Phasic" if component == "phasic" else "EDA_Tonic"
+    return signals_df[col].to_numpy()
+
+
+register_operation("ecg_clean", _pipeline_ecg_clean)
+register_operation("ppg_clean", _pipeline_ppg_clean)
+register_operation("eda_clean", _pipeline_eda_clean)
+register_operation("eda_decompose", _pipeline_eda_decompose)

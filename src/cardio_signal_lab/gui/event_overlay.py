@@ -33,6 +33,7 @@ class EventOverlay:
         """
         self.plot_widget = plot_widget
         self.visible = True
+        self._connected_viewbox = None  # Track connection to avoid spurious disconnect warnings
 
         # Storage for event items
         self.event_lines = []  # InfiniteLine items
@@ -82,7 +83,7 @@ class EventOverlay:
             label = pg.TextItem(
                 text=event.label,
                 color='#FF6B6B',
-                anchor=(0.5, 1.0),  # Center horizontally, anchor at bottom
+                anchor=(0.5, 0.0),  # Center horizontally, top-anchored (hangs down from position)
                 border=pg.mkPen(color='#FF6B6B', width=1),
                 fill=pg.mkBrush(color=(255, 255, 255, 200))  # Semi-transparent white background
             )
@@ -106,12 +107,15 @@ class EventOverlay:
         # Connect to plot range changes to update label positions
         if hasattr(self.plot_item, 'getViewBox'):
             view_box = self.plot_item.getViewBox()
-            # Disconnect any existing connections to avoid duplicates
-            try:
-                view_box.sigRangeChanged.disconnect(self._on_range_changed)
-            except (TypeError, RuntimeError):
-                pass  # No previous connection
+            # Only disconnect if we know we connected before (avoids RuntimeWarning)
+            if self._connected_viewbox is not None:
+                try:
+                    self._connected_viewbox.sigRangeChanged.disconnect(self._on_range_changed)
+                except (TypeError, RuntimeError):
+                    pass
+                self._connected_viewbox = None
             view_box.sigRangeChanged.connect(self._on_range_changed)
+            self._connected_viewbox = view_box
             logger.debug("Connected sigRangeChanged for label position updates")
 
         logger.info(f"Displayed {len(events)} event markers (visible={self.visible})")
@@ -128,8 +132,8 @@ class EventOverlay:
 
         _, (y_min, y_max) = view_box.viewRange()
 
-        # Position labels at 95% of Y range (near top)
-        label_y = y_min + (y_max - y_min) * 0.95
+        # Position labels at 90% of Y range; anchor=(0.5, 0.0) so text hangs down
+        label_y = y_min + (y_max - y_min) * 0.90
 
         # Update all label positions
         for event, label in zip(self.events, self.event_labels):

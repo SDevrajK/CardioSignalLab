@@ -20,7 +20,7 @@ KEYBINDINGS = {
     "edit_delete_peak": QKeySequence(Qt.Key.Key_Delete),  # Delete
 
     # View operations
-    "view_zoom_in": QKeySequence.StandardKey.ZoomIn,  # Ctrl++
+    "view_zoom_in": QKeySequence("Ctrl+="),  # Ctrl+= (Ctrl++ requires Shift on most keyboards)
     "view_zoom_out": QKeySequence.StandardKey.ZoomOut,  # Ctrl+-
     "view_reset": QKeySequence(Qt.Key.Key_R),  # R
     "view_fit": QKeySequence(Qt.Key.Key_F),  # F
