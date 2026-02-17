@@ -43,6 +43,7 @@ from cardio_signal_lab.gui.multi_signal_view import MultiSignalView
 from cardio_signal_lab.gui.signal_type_view import SignalTypeView
 from cardio_signal_lab.gui.single_channel_view import SingleChannelView
 from cardio_signal_lab.gui.status_bar import AppStatusBar
+from cardio_signal_lab.gui.event_editor_dialog import EventEditorDialog
 from cardio_signal_lab.gui.log_panel import LogPanel
 from cardio_signal_lab.gui.processing_panel import ProcessingPanel
 from cardio_signal_lab.processing import ProcessingPipeline, ProcessingWorker
@@ -244,6 +245,11 @@ class MainWindow(QMainWindow):
         import_events_action.triggered.connect(self._on_file_import_events)
         import_events_action.setEnabled(self.current_session is not None)
         menu.addAction(import_events_action)
+
+        edit_events_action = QAction("&Edit Events...", self)
+        edit_events_action.triggered.connect(self._on_file_edit_events)
+        edit_events_action.setEnabled(self.current_session is not None)
+        menu.addAction(edit_events_action)
 
         import_peaks_action = QAction("Import &Peaks (CSV)...", self)
         import_peaks_action.triggered.connect(self._on_file_import_peaks)
@@ -1043,6 +1049,29 @@ class MainWindow(QMainWindow):
             f"Imported {len(events)} events from {Path(file_path).name}", 5000
         )
         logger.info(f"Replaced session events with {len(events)} from {file_path}")
+
+    def _on_file_edit_events(self):
+        """Handle File > Edit Events — open spreadsheet-style event editor."""
+        if self.current_session is None:
+            QMessageBox.warning(self, "No Session", "Load a file first.")
+            return
+
+        current_events = self.current_session.events or []
+        dialog = EventEditorDialog(current_events, parent=self)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        events = dialog.get_events()
+
+        # Replace events on the session and refresh all views
+        object.__setattr__(self.current_session, "events", events)
+        self.multi_signal_view.set_session(self.current_session)
+        self.signal_type_view.set_events(events)
+        self.single_channel_view.set_events(events)
+
+        self.statusBar().showMessage(f"Events updated ({len(events)} events)", 5000)
+        logger.info(f"Events replaced via editor: {len(events)} events")
 
     def _on_file_import_peaks(self):
         """Handle File > Import Peaks — load pre-corrected peaks from a binary CSV."""
