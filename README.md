@@ -19,32 +19,39 @@ Desktop application for viewing, processing, and correcting physiological signal
 
 ## Installation
 
-### 1. Clone the repository
+### For colleagues (no git required)
+
+If you have Anaconda or Miniconda, run these in your terminal:
 
 ```
-git clone <repo-url>
+conda create -n cardio-signal-lab python=3.12
+conda activate cardio-signal-lab
+pip install https://github.com/SDevrajK/CardioSignalLab/archive/refs/heads/main.zip
+```
+
+Then double-click `CardioSignalLab.bat` (download it from the repo) to launch the app.
+
+To update to the latest version:
+
+```
+conda activate cardio-signal-lab
+pip install --upgrade https://github.com/SDevrajK/CardioSignalLab/archive/refs/heads/main.zip
+```
+
+> **Note:** Installing into a dedicated conda environment (not base) avoids DLL conflicts with Qt on Windows.
+
+### For developers (with git)
+
+```
+git clone https://github.com/SDevrajK/CardioSignalLab.git
 cd CardioSignalLab
-```
-
-### 2. Install dependencies and the app
-
-```
 pip install -e .
 ```
-
-That's it. This installs all dependencies and registers the `cardio-signal-lab` command.
 
 ## Running the App
 
 ```
 cardio-signal-lab
-```
-
-Or without installing:
-
-```
-pip install -r requirements.txt
-python main.py
 ```
 
 ### Using a virtual environment (recommended)
