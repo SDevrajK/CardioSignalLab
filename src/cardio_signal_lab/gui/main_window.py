@@ -78,15 +78,19 @@ class MainWindow(QMainWindow):
         # Track whether we came from type view (for ESC navigation)
         self._came_from_type_view = False
 
-        # Processing state
+        # Processing state (active channel)
         self.pipeline = ProcessingPipeline()
         self._raw_samples: np.ndarray | None = None  # Original unprocessed signal
         self._current_peaks: PeakData | None = None
         self._processing_worker: ProcessingWorker | None = None
 
-        # Derived visualization state
+        # Derived visualization state (active channel)
         self._eda_tonic: np.ndarray | None = None   # Tonic (SCL) component from eda_process()
         self._eda_phasic: np.ndarray | None = None  # Phasic (SCR) component from eda_process()
+
+        # Per-channel state store: (SignalType, channel_name) -> state dict
+        # Allows peaks and processing to survive navigation between channels.
+        self._channel_state: dict[tuple, dict] = {}
 
         # Window setup
         self.setWindowTitle("CardioSignalLab")
@@ -552,56 +556,91 @@ class MainWindow(QMainWindow):
         )
         logger.info(f"Switched to type view: {signal_type.value} ({n_channels} channels)")
 
+    def _channel_key(self, signal: SignalData) -> tuple:
+        """Stable per-channel key for the state store."""
+        return (signal.signal_type, signal.channel_name)
+
+    def _save_channel_state(self, signal: SignalData):
+        """Snapshot active processing/peak state for the given channel."""
+        key = self._channel_key(signal)
+        self._channel_state[key] = {
+            "peaks": self._current_peaks,          # PeakData (immutable after edit)
+            "pipeline_steps": list(self.pipeline.steps),  # ProcessingStep refs are read-only
+            "raw_samples": self._raw_samples,       # ndarray ref; never mutated in-place
+            "eda_tonic": self._eda_tonic,
+            "eda_phasic": self._eda_phasic,
+        }
+        n_peaks = self._current_peaks.num_peaks if self._current_peaks else 0
+        logger.debug(
+            f"Saved channel state: {signal.channel_name} "
+            f"({n_peaks} peaks, {len(self.pipeline.steps)} pipeline steps)"
+        )
+
     def _switch_to_channel_view(self, signal: SignalData):
         """Switch to single-channel view for processing.
 
-        Preserves peaks and processing state when returning to the same channel.
-        Resets everything when switching to a different channel.
+        Peaks and processing state are stored per channel so that navigating
+        away and back (or switching between channels) never loses corrections.
         """
         is_same_signal = self.current_signal is signal
+
+        # Persist state of the channel we are leaving
+        if not is_same_signal and self.current_signal is not None:
+            self._save_channel_state(self.current_signal)
 
         self.current_view_level = "channel"
         self.current_signal = signal
 
         if not is_same_signal:
-            # Different channel — reset all processing and derived state
-            self.pipeline.reset()
-            self._raw_samples = None
-            self._current_peaks = None
-            self._eda_tonic = None
-            self._eda_phasic = None
-            self.single_channel_view.clear_peaks()
-            self.single_channel_view.clear_derived()
-            self.processing_panel.clear()
+            key = self._channel_key(signal)
+            saved = self._channel_state.get(key)
 
-        # Always re-render the signal (rebuilds LOD renderer and resets view range)
+            if saved is not None:
+                # Returning to a previously visited channel — restore state
+                self._current_peaks = saved["peaks"]
+                self._raw_samples = saved["raw_samples"]
+                self._eda_tonic = saved["eda_tonic"]
+                self._eda_phasic = saved["eda_phasic"]
+                self.pipeline.steps = list(saved["pipeline_steps"])
+                self.single_channel_view.clear_derived()
+            else:
+                # First visit to this channel — clean slate
+                self.pipeline.reset()
+                self._raw_samples = None
+                self._current_peaks = None
+                self._eda_tonic = None
+                self._eda_phasic = None
+                self.single_channel_view.clear_peaks()
+                self.single_channel_view.clear_derived()
+                self.processing_panel.clear()
+
+        # Always re-render (rebuilds LOD renderer, resets view range)
         self.single_channel_view.set_signal(signal)
 
-        # Restore peak overlay — set_signal() keeps scatter items in the plotItem
-        # but the PeakEditor is gone; re-initialise it from stored peak data.
+        # Re-initialise the peak editor and overlay from stored peak data
         if self._current_peaks is not None:
             self.single_channel_view.set_peaks(self._current_peaks)
 
-        # Restore processing panel steps
+        # Sync processing panel
         if self.pipeline.num_steps > 0:
             self.processing_panel.update_steps(self.pipeline.steps)
 
         # Pass events
         if self.current_session:
-            events = self.current_session.events or []
-            self.single_channel_view.set_events(events)
+            self.single_channel_view.set_events(self.current_session.events or [])
 
         self.stacked_widget.setCurrentWidget(self.single_channel_view)
         self._build_menus()
 
-        # Update status bar
-        returning = " (restored)" if is_same_signal and self._current_peaks is not None else ""
+        n_peaks = self._current_peaks.num_peaks if self._current_peaks else 0
+        restored = n_peaks > 0
+        suffix = f" ({n_peaks} peaks restored)" if restored else ""
         self.statusBar().showMessage(
-            f"Channel: {signal.signal_type.value.upper()} - {signal.channel_name}{returning}", 0
+            f"Channel: {signal.signal_type.value.upper()} - {signal.channel_name}{suffix}", 0
         )
         logger.info(
             f"Switched to channel view: {signal.channel_name}"
-            + (f" — restored {self._current_peaks.num_peaks} peaks" if is_same_signal and self._current_peaks else "")
+            + (f" — restored {n_peaks} peaks" if restored else "")
         )
 
     def _on_return_to_type_view(self):
@@ -666,6 +705,7 @@ class MainWindow(QMainWindow):
 
                 session = loader.load(path)
                 self.current_session = session
+                self._channel_state.clear()  # Discard per-channel state from any previous file
 
                 self._show_metadata_dialog(session)
                 self.signals.file_loaded.emit(session)
@@ -708,6 +748,7 @@ class MainWindow(QMainWindow):
 
             session = loader.load(source_path)
             self.current_session = session
+            self._channel_state.clear()  # Discard per-channel state from any previous file
 
             # Restore processing pipeline
             pipeline_data = session_data.get("processing_pipeline", {})
