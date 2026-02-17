@@ -30,18 +30,18 @@ _OPERATION_LABELS: dict[str, str] = {
 }
 
 
-def _format_step(idx: int, step: dict) -> str:
+def _format_step(idx: int, step) -> str:
     """Format a single pipeline step as a human-readable string.
 
     Args:
         idx: 1-based step index
-        step: Pipeline step dict with "operation" and "params" keys
+        step: ProcessingStep with .operation (str) and .parameters (dict) attributes
 
     Returns:
         Formatted string like "1. Bandpass Filter: 0.5-40.0 Hz, order 4"
     """
-    op = step.get("operation", "?")
-    params = step.get("params", {})
+    op = step.operation
+    params = step.parameters
     label = _OPERATION_LABELS.get(op, op)
 
     param_parts: list[str] = []

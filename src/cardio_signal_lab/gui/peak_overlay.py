@@ -33,6 +33,11 @@ class PeakOverlay:
         peak_clicked: Emitted when user clicks on a peak (peak_index)
     """
 
+    # Marker size bounds in pixels
+    _SIZE_MIN = 4
+    _SIZE_MAX = 12
+    _SIZE_DEFAULT = 10
+
     def __init__(self, plot_widget, parent=None):
         """Initialize peak overlay.
 
@@ -45,24 +50,48 @@ class PeakOverlay:
 
         # Create scatter plot item for markers
         self.scatter = pg.ScatterPlotItem()
-        self.scatter.setSize(10)
+        self.scatter.setSize(self._SIZE_DEFAULT)
         self.scatter.setPxMode(True)  # Size in pixels, not data coordinates
 
         # Add to plot
         if hasattr(plot_widget, 'plotItem'):
             plot_widget.plotItem.addItem(self.scatter)
+            self._viewbox = plot_widget.plotItem.getViewBox()
         else:
             plot_widget.addItem(self.scatter)
+            self._viewbox = plot_widget.getViewBox()
 
         # Data storage
         self.signal_data: SignalData | None = None
         self.peak_data: PeakData | None = None
         self.selected_index: int | None = None
+        self._full_x_range: float = 0.0  # Signal duration for zoom-ratio sizing
 
         # Connect signals
         self.scatter.sigClicked.connect(self._on_peak_clicked)
+        self._viewbox.sigRangeChanged.connect(self._on_range_changed)
 
         logger.debug("PeakOverlay initialized")
+
+    def _on_range_changed(self, view_box, ranges):
+        """Adjust marker size based on zoom level.
+
+        Markers scale from _SIZE_MIN (fully zoomed out) to _SIZE_MAX (zoomed in)
+        using a log10 relationship so the transition feels natural.
+        """
+        if self._full_x_range <= 0:
+            return
+        x_range, _ = ranges
+        current_range = x_range[1] - x_range[0]
+        if current_range <= 0:
+            return
+        ratio = self._full_x_range / current_range
+        size = int(np.clip(
+            self._SIZE_MIN + np.log10(max(ratio, 1.0)) * 4,
+            self._SIZE_MIN,
+            self._SIZE_MAX,
+        ))
+        self.scatter.setSize(size)
 
     def set_peaks(self, signal: SignalData, peaks: PeakData):
         """Display peaks on signal.
@@ -73,6 +102,11 @@ class PeakOverlay:
         """
         self.signal_data = signal
         self.peak_data = peaks
+        self._full_x_range = float(signal.timestamps[-1] - signal.timestamps[0])
+
+        # Set initial size based on current view
+        (x_min, x_max), _ = self._viewbox.viewRange()
+        self._on_range_changed(self._viewbox, ((x_min, x_max), (0, 1)))
 
         if peaks.num_peaks == 0:
             # No peaks to display

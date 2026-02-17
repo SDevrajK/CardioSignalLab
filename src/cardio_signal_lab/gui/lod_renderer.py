@@ -63,48 +63,39 @@ class LODRenderer:
     def _build_pyramids(self) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """Build multi-resolution min/max envelope pyramid.
 
+        Each level is computed directly from the original full-resolution signal
+        so that true peak amplitudes are always contained within the envelope.
+        Computing from averaged intermediate levels causes peak clipping at high
+        zoom-out, making detected peak markers appear above the rendered signal.
+
         Returns:
             List of (timestamps, min_values, max_values) tuples, one per LOD level.
-            Level 0 is full resolution, level N is downsampled by factor 2^N.
+            Level 0 is full resolution, level N downsamples by factor 2^N.
         """
         pyramids = []
 
-        # Level 0: Full resolution
+        # Level 0: Full resolution (min == max == samples)
         pyramids.append((self.timestamps, self.samples, self.samples))
 
-        current_t = self.timestamps
-        current_s = self.samples
-
-        # Build progressively coarser levels
         for level in range(1, self.num_levels):
-            factor = 2  # Downsample by factor of 2 each level
+            block_size = 2 ** level
+            n_blocks = len(self.samples) // block_size
 
-            # Calculate new length (must be at least 2 points)
-            new_len = len(current_t) // factor
-            if new_len < 2:
+            if n_blocks < 2:
                 logger.debug(f"Stopping pyramid at level {level}: insufficient points")
                 break
 
-            # Downsample timestamps (take every Nth point)
-            t_downsampled = current_t[::factor][:new_len]
+            # Reshape original signal into (n_blocks, block_size) for vectorised min/max.
+            # Truncate to a multiple of block_size to allow clean reshape.
+            n_samples = n_blocks * block_size
+            s_blocks = self.samples[:n_samples].reshape(n_blocks, block_size)
+            t_blocks = self.timestamps[:n_samples].reshape(n_blocks, block_size)
 
-            # Compute min/max envelopes using numpy reduceat
-            # This preserves peak features when zoomed out
-            indices = np.arange(0, len(current_s), factor)[:new_len]
-
-            # Handle edge case where last bin might be incomplete
-            if indices[-1] + factor > len(current_s):
-                indices = indices[:-1]
-                t_downsampled = t_downsampled[:-1]
-
-            s_min = np.minimum.reduceat(current_s, indices)
-            s_max = np.maximum.reduceat(current_s, indices)
+            s_min = s_blocks.min(axis=1)
+            s_max = s_blocks.max(axis=1)
+            t_downsampled = t_blocks[:, 0]  # First timestamp of each block
 
             pyramids.append((t_downsampled, s_min, s_max))
-
-            # Use downsampled data as base for next level
-            current_t = t_downsampled
-            current_s = (s_min + s_max) / 2  # Use average for next downsampling
 
         logger.debug(f"Built {len(pyramids)} LOD levels")
         return pyramids
