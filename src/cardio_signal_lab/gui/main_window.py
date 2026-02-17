@@ -553,21 +553,38 @@ class MainWindow(QMainWindow):
         logger.info(f"Switched to type view: {signal_type.value} ({n_channels} channels)")
 
     def _switch_to_channel_view(self, signal: SignalData):
-        """Switch to single-channel view for processing."""
+        """Switch to single-channel view for processing.
+
+        Preserves peaks and processing state when returning to the same channel.
+        Resets everything when switching to a different channel.
+        """
+        is_same_signal = self.current_signal is signal
+
         self.current_view_level = "channel"
         self.current_signal = signal
 
-        # Reset processing state for new signal
-        self.pipeline.reset()
-        self._raw_samples = None
-        self._current_peaks = None
-        self._eda_tonic = None
-        self._eda_phasic = None
-        self.single_channel_view.clear_peaks()
-        self.single_channel_view.clear_derived()
-        self.processing_panel.clear()
+        if not is_same_signal:
+            # Different channel — reset all processing and derived state
+            self.pipeline.reset()
+            self._raw_samples = None
+            self._current_peaks = None
+            self._eda_tonic = None
+            self._eda_phasic = None
+            self.single_channel_view.clear_peaks()
+            self.single_channel_view.clear_derived()
+            self.processing_panel.clear()
 
+        # Always re-render the signal (rebuilds LOD renderer and resets view range)
         self.single_channel_view.set_signal(signal)
+
+        # Restore peak overlay — set_signal() keeps scatter items in the plotItem
+        # but the PeakEditor is gone; re-initialise it from stored peak data.
+        if self._current_peaks is not None:
+            self.single_channel_view.set_peaks(self._current_peaks)
+
+        # Restore processing panel steps
+        if self.pipeline.num_steps > 0:
+            self.processing_panel.update_steps(self.pipeline.steps)
 
         # Pass events
         if self.current_session:
@@ -578,10 +595,14 @@ class MainWindow(QMainWindow):
         self._build_menus()
 
         # Update status bar
+        returning = " (restored)" if is_same_signal and self._current_peaks is not None else ""
         self.statusBar().showMessage(
-            f"Channel: {signal.signal_type.value.upper()} - {signal.channel_name}", 0
+            f"Channel: {signal.signal_type.value.upper()} - {signal.channel_name}{returning}", 0
         )
-        logger.info(f"Switched to channel view: {signal.channel_name}")
+        logger.info(
+            f"Switched to channel view: {signal.channel_name}"
+            + (f" — restored {self._current_peaks.num_peaks} peaks" if is_same_signal and self._current_peaks else "")
+        )
 
     def _on_return_to_type_view(self):
         """Return from channel view to type view."""
