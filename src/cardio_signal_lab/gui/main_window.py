@@ -84,6 +84,10 @@ class MainWindow(QMainWindow):
         self._current_peaks: PeakData | None = None
         self._processing_worker: ProcessingWorker | None = None
 
+        # Derived visualization state
+        self._eda_tonic: np.ndarray | None = None   # Tonic (SCL) component from eda_process()
+        self._eda_phasic: np.ndarray | None = None  # Phasic (SCR) component from eda_process()
+
         # Window setup
         self.setWindowTitle("CardioSignalLab")
         self.resize(self.config.gui.window_width, self.config.gui.window_height)
@@ -455,6 +459,24 @@ class MainWindow(QMainWindow):
         toggle_processing_action.triggered.connect(self._on_view_toggle_processing)
         menu.addAction(toggle_processing_action)
 
+        # Derived visualisation panels (channel view only, signal-type-specific)
+        if self.current_view_level == "channel" and self.current_signal is not None:
+            sig_type = self.current_signal.signal_type
+            if sig_type in (SignalType.ECG, SignalType.PPG) and self._current_peaks is not None:
+                hr_action = QAction("Show &Heart Rate", self)
+                hr_action.setShortcut("H")
+                hr_action.setCheckable(True)
+                hr_action.setChecked(self.single_channel_view.is_derived_visible())
+                hr_action.triggered.connect(self._on_view_toggle_heart_rate)
+                menu.addAction(hr_action)
+            if sig_type == SignalType.EDA and self._eda_tonic is not None:
+                eda_action = QAction("Show &EDA Components", self)
+                eda_action.setShortcut("H")
+                eda_action.setCheckable(True)
+                eda_action.setChecked(self.single_channel_view.is_derived_visible())
+                eda_action.triggered.connect(self._on_view_toggle_eda_components)
+                menu.addAction(eda_action)
+
         # Navigation back actions
         menu.addSeparator()
 
@@ -539,7 +561,10 @@ class MainWindow(QMainWindow):
         self.pipeline.reset()
         self._raw_samples = None
         self._current_peaks = None
+        self._eda_tonic = None
+        self._eda_phasic = None
         self.single_channel_view.clear_peaks()
+        self.single_channel_view.clear_derived()
         self.processing_panel.clear()
 
         self.single_channel_view.set_signal(signal)
@@ -919,6 +944,14 @@ class MainWindow(QMainWindow):
         """Sync peak data from the editor back to MainWindow state."""
         self._current_peaks = peak_data
         self.signals.peaks_updated.emit(peak_data)
+
+        # Auto-refresh heart rate panel if it is visible (ECG/PPG only)
+        if (
+            self.single_channel_view.is_derived_visible()
+            and self.current_signal is not None
+            and self.current_signal.signal_type in (SignalType.ECG, SignalType.PPG)
+        ):
+            self._refresh_heart_rate_panel()
 
     # ---- Process Operations ----
 
@@ -1345,6 +1378,10 @@ class MainWindow(QMainWindow):
                 sampling_rate=int(self.current_signal.sampling_rate),
                 method=method,
             )
+            # Store both components so the derived panel can display them together
+            self._eda_tonic = signals_df["EDA_Tonic"].to_numpy()
+            self._eda_phasic = signals_df["EDA_Phasic"].to_numpy()
+
             col = "EDA_Phasic" if component == "phasic" else "EDA_Tonic"
             result = signals_df[col].to_numpy()
 
@@ -1422,12 +1459,15 @@ class MainWindow(QMainWindow):
         object.__setattr__(self.current_signal, "samples", self._raw_samples.copy())
         self.pipeline.reset()
         self._current_peaks = None
+        self._eda_tonic = None
+        self._eda_phasic = None
 
         # Refresh plot
         self.single_channel_view.set_signal(self.current_signal)
         if self.current_session:
             self.single_channel_view.set_events(self.current_session.events or [])
 
+        self.single_channel_view.clear_derived()
         self.processing_panel.clear()
         self.statusBar().showMessage("Processing reset to raw signal", 3000)
         logger.info("Processing pipeline reset")
@@ -1625,6 +1665,50 @@ class MainWindow(QMainWindow):
         else:
             self.processing_panel.show()
             self.statusBar().showMessage("Processing panel visible", 3000)
+
+    def _on_view_toggle_heart_rate(self):
+        """Toggle heart rate panel for ECG/PPG signals."""
+        if self.single_channel_view.is_derived_visible():
+            self.single_channel_view.clear_derived()
+            self.statusBar().showMessage("Heart rate panel hidden", 3000)
+        else:
+            self._refresh_heart_rate_panel()
+
+    def _on_view_toggle_eda_components(self):
+        """Toggle EDA tonic/phasic panel."""
+        if self.single_channel_view.is_derived_visible():
+            self.single_channel_view.clear_derived()
+            self.statusBar().showMessage("EDA components panel hidden", 3000)
+        else:
+            self._show_eda_components_panel()
+
+    def _refresh_heart_rate_panel(self):
+        """Compute and display (or update) the heart rate panel."""
+        if self.current_signal is None or self._current_peaks is None:
+            return
+        from cardio_signal_lab.processing.derived import compute_heart_rate
+        times, bpm, rolling_bpm = compute_heart_rate(self.current_signal, self._current_peaks)
+        sig_type = self.current_signal.signal_type.value  # "ecg" or "ppg"
+        self.single_channel_view.update_heart_rate(times, bpm, rolling_bpm, sig_type)
+        if len(bpm) > 0:
+            self.statusBar().showMessage(
+                f"Heart rate: mean {bpm.mean():.1f} bpm, {len(bpm)} intervals", 5000
+            )
+
+    def _show_eda_components_panel(self):
+        """Display the EDA tonic/phasic derived panel."""
+        if (
+            self.current_signal is None
+            or self._eda_tonic is None
+            or self._eda_phasic is None
+        ):
+            return
+        self.single_channel_view.show_eda_components(
+            self.current_signal.timestamps,
+            self._eda_tonic,
+            self._eda_phasic,
+        )
+        self.statusBar().showMessage("EDA components: tonic (SCL) and phasic (SCR)", 5000)
 
     # ---- Type-View Operations ----
 

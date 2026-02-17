@@ -12,9 +12,10 @@ import numpy as np
 from loguru import logger
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
 from cardio_signal_lab.core import PeakClassification, PeakData
+from cardio_signal_lab.gui.derived_panel import DerivedPanel
 from cardio_signal_lab.gui.event_overlay import EventOverlay
 from cardio_signal_lab.gui.peak_overlay import PeakOverlay
 from cardio_signal_lab.gui.plot_widget import SignalPlotWidget
@@ -53,8 +54,19 @@ class SingleChannelView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        self._splitter = QSplitter(Qt.Orientation.Vertical)
+        layout.addWidget(self._splitter)
+
         self.plot_widget = SignalPlotWidget()
-        layout.addWidget(self.plot_widget)
+        self._splitter.addWidget(self.plot_widget)
+
+        self.derived_panel = DerivedPanel()
+        self._splitter.addWidget(self.derived_panel)
+        self.derived_panel.hide()
+
+        # Default split: signal 2/3, derived 1/3
+        self._splitter.setStretchFactor(0, 2)
+        self._splitter.setStretchFactor(1, 1)
 
         self.event_overlay = EventOverlay(self.plot_widget)
 
@@ -102,6 +114,57 @@ class SingleChannelView(QWidget):
         self.peak_editor = None
         if self.peak_overlay is not None:
             self.peak_overlay.clear()
+
+    # ---- Derived Panel ----
+
+    def show_heart_rate(
+        self,
+        times: np.ndarray,
+        bpm: np.ndarray,
+        rolling_bpm: np.ndarray,
+        signal_type: str = "ecg",
+    ):
+        """Show the heart rate panel below the signal (2/3 signal, 1/3 HR)."""
+        self.derived_panel.show_heart_rate(times, bpm, rolling_bpm, signal_type)
+        self.derived_panel.link_x_to(self.plot_widget.plotItem)
+        self._splitter.setStretchFactor(0, 2)
+        self._splitter.setStretchFactor(1, 1)
+        self.derived_panel.show()
+
+    def update_heart_rate(
+        self,
+        times: np.ndarray,
+        bpm: np.ndarray,
+        rolling_bpm: np.ndarray,
+        signal_type: str = "ecg",
+    ):
+        """Refresh heart rate plot if already visible; otherwise show it."""
+        if self.derived_panel.isVisible():
+            self.derived_panel.update_heart_rate(times, bpm, rolling_bpm, signal_type)
+        else:
+            self.show_heart_rate(times, bpm, rolling_bpm, signal_type)
+
+    def show_eda_components(
+        self,
+        timestamps: np.ndarray,
+        tonic: np.ndarray,
+        phasic: np.ndarray,
+    ):
+        """Show EDA tonic/phasic below the signal (1/3 signal, 2/3 derived)."""
+        self.derived_panel.show_eda_components(timestamps, tonic, phasic)
+        self.derived_panel.link_x_to(self.plot_widget.plotItem)
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 2)
+        self.derived_panel.show()
+
+    def clear_derived(self):
+        """Hide and clear the derived panel."""
+        self.derived_panel.clear()
+        self.derived_panel.hide()
+
+    def is_derived_visible(self) -> bool:
+        """True if the derived panel is currently shown."""
+        return self.derived_panel.isVisible()
 
     def undo(self):
         """Undo last peak edit."""
