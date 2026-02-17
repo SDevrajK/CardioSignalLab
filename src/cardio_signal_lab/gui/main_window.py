@@ -462,7 +462,7 @@ class MainWindow(QMainWindow):
         # Derived visualisation panels (channel view only, signal-type-specific)
         if self.current_view_level == "channel" and self.current_signal is not None:
             sig_type = self.current_signal.signal_type
-            if sig_type in (SignalType.ECG, SignalType.PPG) and self._current_peaks is not None:
+            if sig_type in (SignalType.ECG, SignalType.PPG):
                 hr_action = QAction("Show &Heart Rate", self)
                 hr_action.setShortcut("H")
                 hr_action.setCheckable(True)
@@ -1671,6 +1671,10 @@ class MainWindow(QMainWindow):
         if self.single_channel_view.is_derived_visible():
             self.single_channel_view.clear_derived()
             self.statusBar().showMessage("Heart rate panel hidden", 3000)
+        elif self._current_peaks is None or self._current_peaks.num_peaks < 2:
+            self.statusBar().showMessage(
+                "Detect peaks first (Process > NeuroKit2 > Detect R-Peaks / Detect Pulse Peaks)", 5000
+            )
         else:
             self._refresh_heart_rate_panel()
 
