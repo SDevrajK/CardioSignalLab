@@ -24,10 +24,12 @@ _OPERATION_LABELS: dict[str, str] = {
     "ecg_clean": "NeuroKit2: ECG Clean",
     "ppg_clean": "NeuroKit2: PPG Clean",
     "eda_clean": "NeuroKit2: EDA Clean",
-    "eda_decompose": "NeuroKit2: EDA Decompose",
+    "eda_decompose": "NeuroKit2: EDA Decompose (tonic + phasic)",
     "detect_ecg_peaks": "Detect R-Peaks",
     "detect_ppg_peaks": "Detect Pulse Peaks",
     "detect_eda_features": "Detect SCR Peaks",
+    # Bad segment repair
+    "interpolate_bad_segments": "Interpolate Bad Segments",
     # Structural operations (change signal length — cannot be pipeline-replayed)
     "crop": "Crop",
     "resample": "Resample",
@@ -83,12 +85,16 @@ def _format_step(idx: int, step) -> str:
         if method == "first_n":
             param_parts.append(f"n={params.get('n_samples', '?')}")
     elif op == "eda_decompose":
-        param_parts = [params.get("component", "?"), params.get("method", "?")]
+        param_parts = [params.get("method", "?")]
     elif op == "eemd_artifact_removal":
         param_parts = [
             f"ensemble={params.get('ensemble_size', '?')}",
             f"noise={params.get('noise_width', '?')}",
         ]
+    elif op == "interpolate_bad_segments":
+        n_segs = len(params.get("segments", []))
+        anchor = params.get("anchor_s", 2.0)
+        param_parts = [f"{n_segs} segment(s)", f"anchor={anchor}s"]
 
     if param_parts:
         return f"{idx}. {label}: {', '.join(str(p) for p in param_parts)}"

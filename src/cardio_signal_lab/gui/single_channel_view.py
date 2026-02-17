@@ -15,6 +15,7 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
 from cardio_signal_lab.core import PeakClassification, PeakData
+from cardio_signal_lab.gui.bad_segment_overlay import BadSegmentOverlay
 from cardio_signal_lab.gui.derived_panel import DerivedPanel
 from cardio_signal_lab.gui.event_overlay import EventOverlay
 from cardio_signal_lab.gui.peak_overlay import PeakOverlay
@@ -47,6 +48,7 @@ class SingleChannelView(QWidget):
         self.peak_editor: PeakEditor | None = None
         self.peak_overlay: PeakOverlay | None = None
         self.event_overlay: EventOverlay | None = None
+        self.bad_segment_overlay: BadSegmentOverlay | None = None
 
         # Accept keyboard focus so keyPressEvent fires
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -69,6 +71,7 @@ class SingleChannelView(QWidget):
         self._splitter.setStretchFactor(1, 1)
 
         self.event_overlay = EventOverlay(self.plot_widget)
+        self.bad_segment_overlay = BadSegmentOverlay(self.plot_widget)
 
         # Connect scene-level mouse clicks (double-click to add peaks)
         self.plot_widget.scene().sigMouseClicked.connect(self._on_scene_clicked)
@@ -303,6 +306,25 @@ class SingleChannelView(QWidget):
         sample = self.peak_editor.indices[peak_idx]
         peak_time = self.signal_data.timestamps[sample]
         self.jump_to_time(peak_time)
+
+    # ---- Bad Segment Overlay ----
+
+    def set_bad_segments(self, bad_segments: list, signal=None):
+        """Render bad segments as shaded red regions on the plot.
+
+        Args:
+            bad_segments: List of BadSegment objects
+            signal: SignalData to use for timestamp lookup (defaults to current signal)
+        """
+        sig = signal or self.signal_data
+        if sig is None or self.bad_segment_overlay is None:
+            return
+        self.bad_segment_overlay.set_bad_segments(bad_segments, sig)
+
+    def clear_bad_segments(self):
+        """Remove all bad segment overlays."""
+        if self.bad_segment_overlay is not None:
+            self.bad_segment_overlay.clear()
 
     # ---- Events Display ----
 

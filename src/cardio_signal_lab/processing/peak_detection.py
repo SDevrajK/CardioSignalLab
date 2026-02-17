@@ -221,12 +221,14 @@ def _pipeline_eda_clean(samples, sampling_rate, **params):
     return nk.eda_clean(samples, sampling_rate=int(sampling_rate))
 
 
-def _pipeline_eda_decompose(samples, sampling_rate, component="phasic", method="highpass", **params):
-    """Pipeline wrapper for nk.eda_process() - returns the selected component."""
-    import neurokit2 as nk
-    signals_df, _ = nk.eda_process(samples, sampling_rate=int(sampling_rate), method=method)
-    col = "EDA_Phasic" if component == "phasic" else "EDA_Tonic"
-    return signals_df[col].to_numpy()
+def _pipeline_eda_decompose(samples, sampling_rate, method="highpass", **params):
+    """Pipeline marker for EDA decomposition — returns signal unchanged.
+
+    Decomposition is performed as a side effect in the GUI layer (both tonic
+    and phasic are shown in the derived panel). This step is recorded in the
+    pipeline so the derived panel can be reconstructed on session reload.
+    """
+    return samples
 
 
 register_operation("ecg_clean", _pipeline_ecg_clean)

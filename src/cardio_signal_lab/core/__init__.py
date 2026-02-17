@@ -1,6 +1,7 @@
 """Core data models, file loading, export, and session management for CardioSignalLab."""
 
 from .data_models import (
+    BadSegment,
     ChannelInfo,
     DerivedSignalData,
     EventData,
@@ -25,6 +26,7 @@ from .importers import load_events_csv, load_peaks_binary_csv
 from .session import load_session, save_session
 
 __all__ = [
+    "BadSegment",
     "SignalType",
     "ProcessingState",
     "PeakClassification",

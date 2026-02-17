@@ -195,6 +195,26 @@ class ProcessingStep:
 
 
 @define
+class BadSegment:
+    """A contiguous time segment identified as containing artifacts.
+
+    Stores sample indices (inclusive) and the detection source so the user
+    knows why the segment was flagged.
+    """
+
+    start_idx: int = field(validator=attrs.validators.instance_of(int))
+    end_idx: int = field(validator=attrs.validators.instance_of(int))
+    # Detection source: "amplitude" (rolling MAD), "gap" (timestamp jump), "manual"
+    source: str = field(default="manual", validator=attrs.validators.instance_of(str))
+
+    def __attrs_post_init__(self):
+        if self.end_idx < self.start_idx:
+            raise ValueError(
+                f"end_idx ({self.end_idx}) must be >= start_idx ({self.start_idx})"
+            )
+
+
+@define
 class SignalData:
     """Single physiological signal with metadata.
 
@@ -213,6 +233,8 @@ class SignalData:
     quality: np.ndarray | None = field(default=None, validator=attrs.validators.optional(_validate_ndarray_1d))
     # Raw LSL timestamps (absolute clock values, before zero-referencing); None for CSV files
     lsl_timestamps: np.ndarray | None = field(default=None, validator=attrs.validators.optional(_validate_ndarray_1d))
+    # Per-channel bad segment list (populated by detection or manual marking)
+    bad_segments: list[BadSegment] = field(factory=list, validator=attrs.validators.instance_of(list))
 
     def __attrs_post_init__(self):
         """Validate samples and timestamps have same length."""

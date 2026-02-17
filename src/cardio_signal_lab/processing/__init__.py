@@ -26,6 +26,12 @@ from cardio_signal_lab.processing.peak_detection import (
 )
 from cardio_signal_lab.processing.peak_correction import PeakEditor
 from cardio_signal_lab.processing.worker import ProcessingWorker
+from cardio_signal_lab.processing.bad_segment_detection import (
+    detect_bad_segments,
+    detect_amplitude_artifacts,
+    detect_timestamp_gaps,
+    interpolate_bad_segments,
+)
 
 # Note: EEMD is imported lazily to avoid slow PyEMD import at startup.
 # Use: from cardio_signal_lab.processing.eemd import eemd_artifact_removal
@@ -52,4 +58,9 @@ __all__ = [
     "PeakEditor",
     # Worker
     "ProcessingWorker",
+    # Bad segment detection
+    "detect_bad_segments",
+    "detect_amplitude_artifacts",
+    "detect_timestamp_gaps",
+    "interpolate_bad_segments",
 ]

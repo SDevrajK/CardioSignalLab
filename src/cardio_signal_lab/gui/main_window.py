@@ -25,6 +25,7 @@ from loguru import logger
 
 from cardio_signal_lab.config import get_config, get_keysequence
 from cardio_signal_lab.core import (
+    BadSegment,
     get_loader,
     SignalType,
     CsvLoader,
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
         self.pipeline = ProcessingPipeline()
         self._raw_samples: np.ndarray | None = None  # Baseline signal for pipeline replay
         self._current_peaks: PeakData | None = None
+        self._current_bad_segments: list[BadSegment] = []
         self._processing_worker: ProcessingWorker | None = None
         # Structural ops (crop / resample) that have been applied directly to the
         # raw signal and cannot be replayed or reverted by the pipeline.
@@ -405,6 +407,27 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
 
+        # --- Bad segment repair ---
+        detect_bad_action = QAction("Detect &Bad Segments...", self)
+        detect_bad_action.triggered.connect(self._on_detect_bad_segments)
+        menu.addAction(detect_bad_action)
+
+        mark_bad_action = QAction("&Mark Bad Segment (Manual)...", self)
+        mark_bad_action.triggered.connect(self._on_mark_bad_segment)
+        menu.addAction(mark_bad_action)
+
+        interpolate_bad_action = QAction("&Interpolate Bad Segments", self)
+        interpolate_bad_action.triggered.connect(self._on_interpolate_bad_segments)
+        interpolate_bad_action.setEnabled(bool(self._current_bad_segments))
+        menu.addAction(interpolate_bad_action)
+
+        clear_bad_action = QAction("Clea&r Bad Segments", self)
+        clear_bad_action.triggered.connect(self._on_clear_bad_segments)
+        clear_bad_action.setEnabled(bool(self._current_bad_segments))
+        menu.addAction(clear_bad_action)
+
+        menu.addSeparator()
+
         resample_action = QAction("&Resample...", self)
         resample_action.triggered.connect(self._on_process_resample)
         menu.addAction(resample_action)
@@ -604,6 +627,7 @@ class MainWindow(QMainWindow):
             "eda_tonic": self._eda_tonic,
             "eda_phasic": self._eda_phasic,
             "structural_ops": list(self._structural_ops),
+            "bad_segments": list(self._current_bad_segments),
         }
         n_peaks = self._current_peaks.num_peaks if self._current_peaks else 0
         logger.debug(
@@ -644,6 +668,7 @@ class MainWindow(QMainWindow):
                 self._eda_phasic = saved["eda_phasic"]
                 self.pipeline.steps = list(saved["pipeline_steps"])
                 self._structural_ops = list(saved.get("structural_ops", []))
+                self._current_bad_segments = list(saved.get("bad_segments", []))
             else:
                 # First visit to this channel — clean slate
                 self.pipeline.reset()
@@ -652,6 +677,7 @@ class MainWindow(QMainWindow):
                 self._eda_tonic = None
                 self._eda_phasic = None
                 self._structural_ops = []
+                self._current_bad_segments = []
                 self.processing_panel.clear()
 
         # Always re-render (rebuilds LOD renderer, resets view range)
@@ -660,6 +686,17 @@ class MainWindow(QMainWindow):
         # Re-initialise the peak editor and overlay from stored peak data
         if self._current_peaks is not None:
             self.single_channel_view.set_peaks(self._current_peaks)
+
+        # Restore bad segment overlay (may be empty on first visit)
+        self.single_channel_view.set_bad_segments(self._current_bad_segments, signal)
+
+        # Auto-show EDA derived panel when returning to a channel where decomposition was done
+        if (
+            signal.signal_type == SignalType.EDA
+            and self._eda_tonic is not None
+            and self._eda_phasic is not None
+        ):
+            self._show_eda_components_panel()
 
         # Sync processing panel
         if self.pipeline.num_steps > 0:
@@ -1247,6 +1284,45 @@ class MainWindow(QMainWindow):
             f"Processing applied ({self.pipeline.num_steps} steps)", 3000
         )
 
+        # Re-derive EDA components if the pipeline contains a decompose step
+        self._recompute_eda_components_if_needed()
+
+    def _recompute_eda_components_if_needed(self):
+        """Recompute EDA tonic/phasic after pipeline replay if a decompose step exists.
+
+        Called after _apply_pipeline_and_update so the derived panel stays in
+        sync when the user adds further filters on top of a decomposed EDA signal.
+        """
+        if self.current_signal is None:
+            return
+        if self.current_signal.signal_type != SignalType.EDA:
+            return
+
+        decompose_step = next(
+            (s for s in self.pipeline.steps if s.operation == "eda_decompose"), None
+        )
+        if decompose_step is None:
+            return
+
+        import neurokit2 as nk
+
+        method = decompose_step.parameters.get("method", "highpass")
+        try:
+            sr = int(self.current_signal.sampling_rate)
+            components = nk.eda_phasic(
+                self.current_signal.samples, sampling_rate=sr, method=method
+            )
+            self._eda_tonic = np.asarray(components["EDA_Tonic"])
+            self._eda_phasic = np.asarray(components["EDA_Phasic"])
+
+            # Refresh derived panel if it is currently shown
+            if self.single_channel_view.is_derived_visible():
+                self._show_eda_components_panel()
+
+            logger.debug("EDA components recomputed after pipeline replay")
+        except Exception as e:
+            logger.warning(f"EDA component recomputation failed: {e}")
+
     def _on_process_filter(self):
         """Handle Process > Bandpass Filter."""
         if self.current_signal is None:
@@ -1636,8 +1712,10 @@ class MainWindow(QMainWindow):
     def _on_nk_eda_decompose(self):
         """Decompose EDA into tonic/phasic components using NeuroKit2.
 
-        Replaces the current signal with the selected component so it can be
-        processed further or used for SCR peak detection.
+        The main signal is kept unchanged. Tonic (SCL) and phasic (SCR) are
+        shown as two stacked plots in the derived panel below the signal.
+        SCR peak detection (nk.eda_process) always decomposes internally and
+        is unaffected by which view is shown here.
         """
         if self.current_signal is None:
             return
@@ -1646,12 +1724,11 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("Decompose EDA")
         layout = QFormLayout(dialog)
 
-        layout.addRow(QLabel("Decompose EDA into tonic (SCL) and phasic (SCR) components."))
-        layout.addRow(QLabel("The selected component replaces the current signal."))
-
-        component_combo = QComboBox()
-        component_combo.addItems(["Phasic (SCR)", "Tonic (SCL)"])
-        layout.addRow("Keep component:", component_combo)
+        layout.addRow(QLabel(
+            "Decompose EDA into tonic (SCL) and phasic (SCR) components.\n"
+            "Both components are shown in the derived panel below the signal.\n"
+            "The main signal is not modified."
+        ))
 
         method_combo = QComboBox()
         method_combo.addItems(["highpass", "cvxEDA", "sparse"])
@@ -1667,41 +1744,30 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        component = "phasic" if component_combo.currentIndex() == 0 else "tonic"
         method = method_combo.currentText()
 
         import neurokit2 as nk
 
-        self._ensure_raw_backup()
         try:
             sr = int(self.current_signal.sampling_rate)
-            # Step 1: Clean with the default neurokit method (lowpass filter).
-            # The decomposition method is separate from the cleaning method —
-            # passing "highpass"/"cvxEDA"/"sparse" directly to eda_process()
-            # would be misinterpreted as the cleaning method.
-            cleaned = np.asarray(nk.eda_clean(
-                self.current_signal.samples, sampling_rate=sr
-            ))
-            # Step 2: Decompose into tonic/phasic with the user-chosen method.
-            # nk.eda_phasic() returns a DataFrame with EDA_Tonic and EDA_Phasic columns.
-            components = nk.eda_phasic(cleaned, sampling_rate=sr, method=method)
-            # Store both components so the derived panel can display them together
+            # nk.eda_phasic() decomposes already-cleaned EDA into tonic + phasic.
+            components = nk.eda_phasic(
+                self.current_signal.samples, sampling_rate=sr, method=method
+            )
             self._eda_tonic = np.asarray(components["EDA_Tonic"])
             self._eda_phasic = np.asarray(components["EDA_Phasic"])
 
-            col = "EDA_Phasic" if component == "phasic" else "EDA_Tonic"
-            result = np.asarray(components[col])
-
-            self.pipeline.add_step("eda_decompose", {"component": component, "method": method})
-            object.__setattr__(self.current_signal, "samples", result)
-            self.single_channel_view.set_signal(self.current_signal)
-            if self.current_session:
-                self.single_channel_view.set_events(self.current_session.events or [])
+            # Record in pipeline for history (step returns signal unchanged)
+            self.pipeline.add_step("eda_decompose", {"method": method})
             self._refresh_processing_panel()
+
+            # Show tonic + phasic in the derived panel
+            self._show_eda_components_panel()
+
             self.statusBar().showMessage(
-                f"EDA decomposed: showing {component} component ({method})", 5000
+                f"EDA decomposed ({method}): tonic + phasic shown below", 5000
             )
-            logger.info(f"Applied nk.eda_process(): component={component}, method={method}")
+            logger.info(f"EDA decomposed: method={method}")
         except Exception as e:
             logger.error(f"EDA decompose failed: {e}")
             QMessageBox.critical(self, "Error", f"EDA decomposition failed:\n{e}")
@@ -2009,6 +2075,194 @@ class MainWindow(QMainWindow):
             f"({len(cropped_raw)} samples)"
         )
 
+    def _on_detect_bad_segments(self):
+        """Handle Process > Detect Bad Segments - auto-detect amplitude and gap artifacts."""
+        if self.current_signal is None:
+            return
+
+        from cardio_signal_lab.processing.bad_segment_detection import detect_bad_segments
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Detect Bad Segments")
+        layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel(
+            "Detects amplitude transients (rolling MAD) and timestamp gaps.\n"
+            "Results are shown as red shaded regions and can be repaired\n"
+            "with Interpolate Bad Segments."
+        ))
+
+        mad_spin = QDoubleSpinBox()
+        mad_spin.setDecimals(1)
+        mad_spin.setRange(1.0, 20.0)
+        mad_spin.setSingleStep(0.5)
+        mad_spin.setValue(4.0)
+        mad_spin.setToolTip("Threshold in multiples of rolling MAD. Lower = more sensitive.")
+        layout.addRow("MAD threshold:", mad_spin)
+
+        window_spin = QDoubleSpinBox()
+        window_spin.setDecimals(1)
+        window_spin.setRange(1.0, 60.0)
+        window_spin.setSingleStep(1.0)
+        window_spin.setValue(10.0)
+        window_spin.setToolTip("Rolling window duration in seconds for baseline estimation.")
+        layout.addRow("Window (s):", window_spin)
+
+        dilation_spin = QDoubleSpinBox()
+        dilation_spin.setDecimals(2)
+        dilation_spin.setRange(0.0, 2.0)
+        dilation_spin.setSingleStep(0.05)
+        dilation_spin.setValue(0.3)
+        dilation_spin.setToolTip("Padding added to each side of detected regions (captures edge ringing).")
+        layout.addRow("Dilation (s):", dilation_spin)
+
+        gap_spin = QDoubleSpinBox()
+        gap_spin.setDecimals(1)
+        gap_spin.setRange(1.1, 20.0)
+        gap_spin.setSingleStep(0.5)
+        gap_spin.setValue(2.0)
+        gap_spin.setToolTip("Minimum gap size as a multiple of the expected sample interval.")
+        layout.addRow("Gap threshold (x interval):", gap_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        bad_segs = detect_bad_segments(
+            self.current_signal.samples,
+            self.current_signal.timestamps,
+            self.current_signal.sampling_rate,
+            mad_threshold=mad_spin.value(),
+            window_s=window_spin.value(),
+            dilation_s=dilation_spin.value(),
+            gap_multiplier=gap_spin.value(),
+        )
+
+        self._current_bad_segments = bad_segs
+        self.single_channel_view.set_bad_segments(bad_segs, self.current_signal)
+
+        n_amp = sum(1 for s in bad_segs if "amplitude" in s.source)
+        n_gap = sum(1 for s in bad_segs if "gap" in s.source)
+        msg = f"Found {len(bad_segs)} bad segment(s): {n_amp} amplitude, {n_gap} gap"
+        self.statusBar().showMessage(msg, 5000)
+        logger.info(msg)
+
+        # Rebuild menu so Interpolate/Clear actions are enabled
+        self._build_menus()
+
+    def _on_mark_bad_segment(self):
+        """Handle Process > Mark Bad Segment (Manual) - user-specified time range."""
+        if self.current_signal is None:
+            return
+
+        sig = self.current_signal
+        t_start_sig = float(sig.timestamps[0])
+        t_end_sig = float(sig.timestamps[-1])
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Mark Bad Segment")
+        layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel(
+            "Enter the time range to mark as a bad segment.\n"
+            "The region will be added to the current bad segment list."
+        ))
+
+        start_spin = QDoubleSpinBox()
+        start_spin.setDecimals(3)
+        start_spin.setRange(t_start_sig, t_end_sig)
+        start_spin.setValue(t_start_sig)
+        layout.addRow("Start time (s):", start_spin)
+
+        end_spin = QDoubleSpinBox()
+        end_spin.setDecimals(3)
+        end_spin.setRange(t_start_sig, t_end_sig)
+        end_spin.setValue(min(t_start_sig + 1.0, t_end_sig))
+        layout.addRow("End time (s):", end_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        t0 = start_spin.value()
+        t1 = end_spin.value()
+        if t1 <= t0:
+            QMessageBox.warning(self, "Invalid Range", "End time must be greater than start time.")
+            return
+
+        timestamps = sig.timestamps
+        start_idx = int(np.searchsorted(timestamps, t0))
+        end_idx = int(np.searchsorted(timestamps, t1, side="right")) - 1
+        start_idx = max(0, min(start_idx, len(timestamps) - 1))
+        end_idx = max(start_idx, min(end_idx, len(timestamps) - 1))
+
+        new_seg = BadSegment(start_idx=start_idx, end_idx=end_idx, source="manual")
+        self._current_bad_segments = list(self._current_bad_segments) + [new_seg]
+        self.single_channel_view.set_bad_segments(self._current_bad_segments, sig)
+
+        logger.info(
+            f"Marked bad segment: [{t0:.3f}, {t1:.3f}]s "
+            f"(samples {start_idx}-{end_idx})"
+        )
+        self.statusBar().showMessage(
+            f"Marked bad segment: {t0:.3f}-{t1:.3f}s ({end_idx - start_idx + 1} samples)",
+            4000,
+        )
+        self._build_menus()
+
+    def _on_interpolate_bad_segments(self):
+        """Handle Process > Interpolate Bad Segments - cubic spline repair."""
+        if self.current_signal is None or not self._current_bad_segments:
+            self.statusBar().showMessage("No bad segments to interpolate", 3000)
+            return
+
+        from cardio_signal_lab.processing.bad_segment_detection import interpolate_bad_segments
+
+        self._ensure_raw_backup()
+
+        # Serialize segment list as JSON-compatible pairs for pipeline storage
+        segments_param = [
+            [seg.start_idx, seg.end_idx]
+            for seg in self._current_bad_segments
+        ]
+
+        self.pipeline.add_step("interpolate_bad_segments", {
+            "segments": segments_param,
+            "anchor_s": 2.0,
+        })
+
+        self._apply_pipeline_and_update()
+
+        # Segments have been repaired — clear the overlay
+        self._current_bad_segments = []
+        self.single_channel_view.clear_bad_segments()
+
+        n = len(segments_param)
+        self.statusBar().showMessage(
+            f"Interpolated {n} bad segment(s) (cubic spline, anchor=2s)", 5000
+        )
+        logger.info(f"Interpolated {n} bad segment(s)")
+        self._build_menus()
+
+    def _on_clear_bad_segments(self):
+        """Handle Process > Clear Bad Segments - discard current detection without repairing."""
+        self._current_bad_segments = []
+        self.single_channel_view.clear_bad_segments()
+        self.statusBar().showMessage("Bad segments cleared", 3000)
+        self._build_menus()
+
     def _on_process_reset(self):
         """Handle Process > Reset Processing - revert to raw signal.
 
@@ -2050,12 +2304,14 @@ class MainWindow(QMainWindow):
         self._current_peaks = None
         self._eda_tonic = None
         self._eda_phasic = None
+        self._current_bad_segments = []
 
         self.single_channel_view.set_signal(self.current_signal)
         if self.current_session:
             self.single_channel_view.set_events(self.current_session.events or [])
 
         self.single_channel_view.clear_derived()
+        self.single_channel_view.clear_bad_segments()
         self.processing_panel.clear()
         self.statusBar().showMessage("Processing reset", 3000)
         logger.info("Processing pipeline reset")
