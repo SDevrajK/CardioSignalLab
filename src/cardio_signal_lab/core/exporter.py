@@ -47,16 +47,24 @@ def export_csv(
     })
 
     if include_peaks and peaks is not None and peaks.num_peaks > 0:
-        # Create peak marker column
+        # Peak marker and classification columns (sample-aligned)
         peak_marker = np.zeros(len(signal.samples), dtype=int)
         peak_marker[peaks.indices] = 1
 
-        # Create classification column
         peak_classification = np.full(len(signal.samples), -1, dtype=int)
         peak_classification[peaks.indices] = peaks.classifications
 
+        # N-N interval column: placed at each peak row, NaN elsewhere.
+        # N-N[i] = time from peak i to peak i+1 (ms); NaN at last peak and non-peak rows.
+        nn_ms_col = np.full(len(signal.samples), np.nan)
+        if peaks.num_peaks > 1:
+            peak_times = signal.timestamps[peaks.indices]
+            nn_ms = np.diff(peak_times) * 1000.0
+            nn_ms_col[peaks.indices[:-1]] = nn_ms
+
         df["peak"] = peak_marker
         df["peak_classification"] = peak_classification
+        df["nn_interval_ms"] = nn_ms_col
 
     # Save
     df.to_csv(output_path, index=False)
@@ -101,11 +109,25 @@ def export_npy(
         class_file = output_path.parent / f"{stem}_classifications.npy"
         np.save(class_file, peaks.classifications)
 
-        logger.info(f"Exported signal + peaks to NPY: {signal_file}, {peaks_file}, {class_file}")
+        # N-N intervals (ms): sequential inter-peak differences, NaN for last peak
+        peak_times = signal.timestamps[peaks.indices]
+        nn_ms = np.full(len(peak_times), np.nan)
+        if len(peak_times) > 1:
+            nn_ms[:-1] = np.diff(peak_times) * 1000.0
+        nn_file = output_path.parent / f"{stem}_nn_intervals_ms.npy"
+        np.save(nn_file, nn_ms)
+
+        logger.info(
+            f"Exported signal + peaks to NPY: {signal_file}, {peaks_file}, "
+            f"{class_file}, {nn_file}"
+        )
     else:
         logger.info(f"Exported signal to NPY: {signal_file}")
 
     return signal_file
+
+
+_CLASSIFICATION_LABELS = {0: "AUTO", 1: "MANUAL", 2: "ECTOPIC", 3: "BAD"}
 
 
 def export_annotations(
@@ -113,17 +135,21 @@ def export_annotations(
     peaks: PeakData,
     output_path: Path | str,
 ) -> Path:
-    """Export peak annotations as CSV with timestamps and classifications.
+    """Export peak annotations as CSV with N-N intervals and classifications.
 
-    CSV format:
-    - peak_index: Sample index
-    - time_s: Timestamp in seconds
-    - amplitude: Signal value at peak
-    - classification: Classification value (0=AUTO, 1=MANUAL, 2=ECTOPIC, 3=BAD)
+    CSV columns:
+    - peak_index: Sample index in the signal array
+    - time_s: Peak timestamp in seconds
+    - amplitude: Signal amplitude at peak
+    - classification: Numeric code (0=AUTO, 1=MANUAL, 2=ECTOPIC, 3=BAD)
+    - classification_label: Human-readable label
+    - nn_interval_ms: Interval to the *next* peak in milliseconds (NaN for
+      the last peak). Computed from raw sequential timestamps regardless of
+      classification so researchers can apply their own filtering criteria.
 
     Args:
-        signal: SignalData
-        peaks: PeakData with annotations
+        signal: SignalData (provides timestamps and samples)
+        peaks: PeakData — peaks must be sorted by index (guaranteed by PeakEditor)
         output_path: Output annotation CSV path
 
     Returns:
@@ -131,25 +157,43 @@ def export_annotations(
     """
     output_path = Path(output_path)
 
+    _EMPTY_COLS = [
+        "peak_index", "time_s", "amplitude",
+        "classification", "classification_label", "nn_interval_ms",
+    ]
+
     if peaks.num_peaks == 0:
         logger.warning("No peaks to export")
-        # Create empty file
-        pd.DataFrame(columns=["peak_index", "time_s", "amplitude", "classification"]).to_csv(
-            output_path, index=False
-        )
+        pd.DataFrame(columns=_EMPTY_COLS).to_csv(output_path, index=False)
         return output_path
 
-    # Build annotation DataFrame
+    peak_times = signal.timestamps[peaks.indices]
+
+    # N-N intervals: difference to next peak in ms; NaN for the final peak
+    nn_ms = np.full(len(peak_times), np.nan)
+    if len(peak_times) > 1:
+        nn_ms[:-1] = np.diff(peak_times) * 1000.0
+
+    classification_labels = [
+        _CLASSIFICATION_LABELS.get(int(c), str(c)) for c in peaks.classifications
+    ]
+
     df = pd.DataFrame({
         "peak_index": peaks.indices,
-        "time_s": signal.timestamps[peaks.indices],
+        "time_s": peak_times,
         "amplitude": signal.samples[peaks.indices],
         "classification": peaks.classifications,
+        "classification_label": classification_labels,
+        "nn_interval_ms": nn_ms,
     })
 
     df.to_csv(output_path, index=False)
 
-    logger.info(f"Exported {len(df)} peak annotations to {output_path}")
+    n_valid = int(np.sum(~np.isnan(nn_ms)))
+    logger.info(
+        f"Exported {len(df)} peaks to {output_path} "
+        f"({n_valid} N-N intervals; mean={np.nanmean(nn_ms):.1f} ms)"
+    )
     return output_path
 
 
