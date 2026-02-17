@@ -1,15 +1,27 @@
 @echo off
-call conda activate cardio-signal-lab 2>nul
-python -c "import cardio_signal_lab" >nul 2>&1
-if errorlevel 1 (
-    echo Error: CardioSignalLab is not installed.
-    echo.
-    echo To install, open Anaconda Prompt or your terminal and run:
-    echo conda create -n cardio-signal-lab python=3.12
-    echo conda activate cardio-signal-lab
-    echo pip install https://github.com/SDevrajK/CardioSignalLab/archive/refs/heads/main.zip
-    echo.
-    pause
-    exit /b 1
+set CONDA_ENV=cardio-signal-lab
+
+for %%D in (
+    "%USERPROFILE%\miniconda3"
+    "%USERPROFILE%\Miniconda3"
+    "%USERPROFILE%\anaconda3"
+    "%USERPROFILE%\Anaconda3"
+    "C:\ProgramData\miniconda3"
+    "C:\ProgramData\anaconda3"
+    "C:\miniconda3"
+    "C:\anaconda3"
+) do (
+    if exist "%%~D\envs\%CONDA_ENV%\pythonw.exe" (
+        start "" "%%~D\envs\%CONDA_ENV%\pythonw.exe" -c "from cardio_signal_lab.app import main; main()"
+        exit /b 0
+    )
 )
-start "" pythonw -c "from cardio_signal_lab.app import main; main()"
+
+echo Error: Could not find the "%CONDA_ENV%" conda environment.
+echo.
+echo Please set it up first. Open Anaconda Prompt and run:
+echo     conda create -n %CONDA_ENV% python=3.12
+echo     conda activate %CONDA_ENV%
+echo     pip install https://github.com/SDevrajK/CardioSignalLab/archive/refs/heads/main.zip
+echo.
+pause
