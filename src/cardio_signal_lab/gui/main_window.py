@@ -36,6 +36,7 @@ from cardio_signal_lab.core import (
     export_csv,
     export_npy,
     export_annotations,
+    export_intervals,
     save_processing_parameters,
     load_events_csv,
     load_peaks_binary_csv,
@@ -979,15 +980,19 @@ class MainWindow(QMainWindow):
         layout = QFormLayout(dialog)
 
         format_combo = QComboBox()
-        format_combo.addItems(["CSV", "NumPy Arrays (.npy)", "Annotations Only (CSV)"])
+        format_combo.addItems([
+            "CSV (signal + peaks)",
+            "NumPy Arrays (.npy)",
+            "Annotations Only (CSV)",
+            "RR-Intervals (CSV)",
+            "NN-Intervals (CSV)",
+        ])
         layout.addRow("Export format:", format_combo)
 
-        include_peaks_check = None
-        if format_combo.currentText() == "CSV":
-            from PySide6.QtWidgets import QCheckBox
-            include_peaks_check = QCheckBox()
-            include_peaks_check.setChecked(True)
-            layout.addRow("Include peaks:", include_peaks_check)
+        from PySide6.QtWidgets import QCheckBox
+        include_peaks_check = QCheckBox()
+        include_peaks_check.setChecked(True)
+        layout.addRow("Include peaks:", include_peaks_check)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -1001,13 +1006,78 @@ class MainWindow(QMainWindow):
 
         export_format = format_combo.currentText()
 
-        # Get export path
-        if export_format == "CSV":
+        # Interval exports need a parameter dialog before the file picker
+        interval_params: dict | None = None
+        if export_format in ("RR-Intervals (CSV)", "NN-Intervals (CSV)"):
+            if self._current_peaks is None or self._current_peaks.num_peaks < 2:
+                QMessageBox.warning(
+                    self, "No Peaks",
+                    "Interval export requires at least 2 detected peaks.\n"
+                    "Run Process > Detect Peaks first."
+                )
+                return
+
+            param_dialog = QDialog(self)
+            param_dialog.setWindowTitle("Interval Export Parameters")
+            playout = QFormLayout(param_dialog)
+
+            playout.addRow(QLabel(
+                "Physiological validity: reject intervals outside [min, max] ms.\n"
+                "Statistical validity: reject outliers beyond threshold x MAD\n"
+                "from the median of all intervals."
+            ))
+
+            min_spin = QDoubleSpinBox()
+            min_spin.setRange(100.0, 1000.0)
+            min_spin.setSingleStep(50.0)
+            min_spin.setValue(300.0)
+            min_spin.setSuffix(" ms")
+            playout.addRow("Min interval (physiological):", min_spin)
+
+            max_spin = QDoubleSpinBox()
+            max_spin.setRange(500.0, 5000.0)
+            max_spin.setSingleStep(100.0)
+            max_spin.setValue(2000.0)
+            max_spin.setSuffix(" ms")
+            playout.addRow("Max interval (physiological):", max_spin)
+
+            thresh_spin = QDoubleSpinBox()
+            thresh_spin.setDecimals(1)
+            thresh_spin.setRange(1.0, 10.0)
+            thresh_spin.setSingleStep(0.5)
+            thresh_spin.setValue(3.0)
+            thresh_spin.setToolTip("Outlier threshold in multiples of MAD from the median.")
+            playout.addRow("Statistical threshold (x MAD):", thresh_spin)
+
+            pbuttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            )
+            pbuttons.accepted.connect(param_dialog.accept)
+            pbuttons.rejected.connect(param_dialog.reject)
+            playout.addRow(pbuttons)
+
+            if param_dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            interval_params = {
+                "min_rr_ms": min_spin.value(),
+                "max_rr_ms": max_spin.value(),
+                "stat_threshold": thresh_spin.value(),
+            }
+
+        # Determine file extension and filter for the file picker
+        if export_format == "CSV (signal + peaks)":
             file_filter = "CSV Files (*.csv);;All Files (*.*)"
             default_ext = ".csv"
         elif export_format == "NumPy Arrays (.npy)":
             file_filter = "NumPy Files (*.npy);;All Files (*.*)"
             default_ext = "_signal.npy"
+        elif export_format == "RR-Intervals (CSV)":
+            file_filter = "CSV Files (*.csv);;All Files (*.*)"
+            default_ext = "_rr_intervals.csv"
+        elif export_format == "NN-Intervals (CSV)":
+            file_filter = "CSV Files (*.csv);;All Files (*.*)"
+            default_ext = "_nn_intervals.csv"
         else:  # Annotations
             file_filter = "CSV Files (*.csv);;All Files (*.*)"
             default_ext = "_annotations.csv"
@@ -1025,8 +1095,8 @@ class MainWindow(QMainWindow):
         path = Path(file_path)
 
         try:
-            if export_format == "CSV":
-                include_peaks = include_peaks_check.isChecked() if include_peaks_check else True
+            if export_format == "CSV (signal + peaks)":
+                include_peaks = include_peaks_check.isChecked()
                 export_csv(
                     signal=self.current_signal,
                     peaks=self._current_peaks,
@@ -1036,7 +1106,6 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Exported to CSV: {path.name}", 5000)
 
             elif export_format == "NumPy Arrays (.npy)":
-                # Remove _signal.npy suffix for base path
                 base_path = path.parent / path.stem.replace("_signal", "")
                 export_npy(
                     signal=self.current_signal,
@@ -1044,6 +1113,20 @@ class MainWindow(QMainWindow):
                     output_path=base_path,
                 )
                 self.statusBar().showMessage(f"Exported to NPY: {base_path.name}*", 5000)
+
+            elif export_format in ("RR-Intervals (CSV)", "NN-Intervals (CSV)"):
+                mode = "rr" if export_format.startswith("RR") else "nn"
+                events = self.current_session.events if self.current_session else None
+                export_intervals(
+                    signal=self.current_signal,
+                    peaks=self._current_peaks,
+                    output_path=path,
+                    mode=mode,
+                    events=events or [],
+                    **interval_params,
+                )
+                label = "RR" if mode == "rr" else "NN"
+                self.statusBar().showMessage(f"Exported {label} intervals: {path.name}", 5000)
 
             else:  # Annotations
                 if self._current_peaks is None or self._current_peaks.num_peaks == 0:

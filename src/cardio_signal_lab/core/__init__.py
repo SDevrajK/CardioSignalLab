@@ -18,6 +18,7 @@ from .data_models import (
 from .exporter import (
     export_annotations,
     export_csv,
+    export_intervals,
     export_npy,
     save_processing_parameters,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "export_csv",
     "export_npy",
     "export_annotations",
+    "export_intervals",
     "save_processing_parameters",
     "save_session",
     "load_session",
