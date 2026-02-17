@@ -1,0 +1,12 @@
+{
+  "signal_type": "ppg",
+  "sampling_rate": 250.0,
+  "processing_pipeline": [
+    {
+      "operation": "ppg_clean",
+      "parameters": {},
+      "timestamp": 1771354833.650291
+    }
+  ],
+  "software": "CardioSignalLab MVP"
+}

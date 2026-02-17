@@ -235,6 +235,11 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._on_file_open)
         menu.addAction(open_action)
 
+        append_action = QAction("&Append File...", self)
+        append_action.triggered.connect(self._on_file_append)
+        append_action.setEnabled(self.current_session is not None)
+        menu.addAction(append_action)
+
         save_action = QAction("&Save", self)
         save_action.setShortcut(get_keysequence("file_save"))
         save_action.triggered.connect(self._on_file_save)
@@ -326,22 +331,65 @@ class MainWindow(QMainWindow):
                 menu.addAction(placeholder)
 
     def _add_process_menu_actions(self, menu):
-        """Add Process menu actions, adapted to the current signal type.
+        """Add Process menu actions, ordered from first step to last.
 
-        Menu structure varies by signal type:
-        - ECG: Filters (Bandpass, Notch, Baseline, Zero-Ref) | NeuroKit2 > (Detect R-Peaks)
-        - PPG: Filters | EEMD Artifact Removal | NeuroKit2 > (Detect Pulse Peaks)
-        - EDA: Filters (Bandpass, Baseline, Zero-Ref) | NeuroKit2 > (Clean, Decompose, Detect SCR)
+        Order: Standard macro | Crop/Resample | Bad segments |
+               Filters | NK clean + detect | Reset
         """
         if self.current_signal is None:
             return
 
         sig_type = self.current_signal.signal_type
 
-        # --- Generic signal filters (all types) ---
+        # --- Standard Processing macro (ECG/PPG only) ---
+        if sig_type in (SignalType.ECG, SignalType.PPG):
+            standard_action = QAction("Standard &Processing...", self)
+            standard_action.triggered.connect(self._on_process_standard)
+            menu.addAction(standard_action)
+            menu.addSeparator()
+
+        # --- Structural edits (change signal extent / sample rate) ---
+        crop_action = QAction("Cr&op...", self)
+        crop_action.triggered.connect(self._on_process_crop)
+        menu.addAction(crop_action)
+
+        resample_action = QAction("&Resample...", self)
+        resample_action.triggered.connect(self._on_process_resample)
+        menu.addAction(resample_action)
+
+        menu.addSeparator()
+
+        # --- Bad segment detection and repair ---
+        detect_bad_action = QAction("Detect &Bad Segments...", self)
+        detect_bad_action.triggered.connect(self._on_detect_bad_segments)
+        menu.addAction(detect_bad_action)
+
+        mark_bad_action = QAction("&Mark Bad Segment (Manual)...", self)
+        mark_bad_action.triggered.connect(self._on_mark_bad_segment)
+        menu.addAction(mark_bad_action)
+
+        interpolate_bad_action = QAction("&Interpolate Bad Segments", self)
+        interpolate_bad_action.triggered.connect(self._on_interpolate_bad_segments)
+        interpolate_bad_action.setEnabled(bool(self._current_bad_segments))
+        menu.addAction(interpolate_bad_action)
+
+        clear_bad_action = QAction("Clea&r Bad Segments", self)
+        clear_bad_action.triggered.connect(self._on_clear_bad_segments)
+        clear_bad_action.setEnabled(bool(self._current_bad_segments))
+        menu.addAction(clear_bad_action)
+
+        menu.addSeparator()
+
+        # --- Signal filters ---
         filter_action = QAction("&Bandpass Filter...", self)
         filter_action.triggered.connect(self._on_process_filter)
         menu.addAction(filter_action)
+
+        # Notch filter: ECG and PPG only (EDA is low-frequency; notch is not useful)
+        if sig_type in (SignalType.ECG, SignalType.PPG):
+            notch_action = QAction("&Notch Filter...", self)
+            notch_action.triggered.connect(self._on_process_notch)
+            menu.addAction(notch_action)
 
         baseline_action = QAction("&Detrend (Polynomial)...", self)
         baseline_action.triggered.connect(self._on_process_baseline)
@@ -351,22 +399,15 @@ class MainWindow(QMainWindow):
         zero_ref_action.triggered.connect(self._on_process_zero_reference)
         menu.addAction(zero_ref_action)
 
-        # Notch filter: ECG and PPG only (EDA is low-frequency; notch is not useful)
-        if sig_type in (SignalType.ECG, SignalType.PPG):
-            notch_action = QAction("&Notch Filter...", self)
-            notch_action.triggered.connect(self._on_process_notch)
-            menu.addAction(notch_action)
-
-        menu.addSeparator()
-
-        # --- Artifact removal: PPG only (EEMD algorithm is PPG-specific) ---
+        # EEMD artifact removal: PPG only
         if sig_type == SignalType.PPG:
             artifact_action = QAction("&Artifact Removal (EEMD)...", self)
             artifact_action.triggered.connect(self._on_process_artifact_removal)
             menu.addAction(artifact_action)
-            menu.addSeparator()
 
-        # --- NeuroKit2 submenu ---
+        menu.addSeparator()
+
+        # --- NeuroKit2: clean -> decompose (EDA) -> detect peaks ---
         nk_menu = menu.addMenu("&NeuroKit2")
 
         if sig_type == SignalType.ECG:
@@ -401,41 +442,9 @@ class MainWindow(QMainWindow):
             nk_menu.addAction(detect_action)
 
         else:
-            # UNKNOWN type: offer generic peak detection with a warning
             detect_action = QAction("&Detect Peaks (generic)", self)
             detect_action.triggered.connect(self._on_process_detect_peaks)
             nk_menu.addAction(detect_action)
-
-        menu.addSeparator()
-
-        # --- Bad segment repair ---
-        detect_bad_action = QAction("Detect &Bad Segments...", self)
-        detect_bad_action.triggered.connect(self._on_detect_bad_segments)
-        menu.addAction(detect_bad_action)
-
-        mark_bad_action = QAction("&Mark Bad Segment (Manual)...", self)
-        mark_bad_action.triggered.connect(self._on_mark_bad_segment)
-        menu.addAction(mark_bad_action)
-
-        interpolate_bad_action = QAction("&Interpolate Bad Segments", self)
-        interpolate_bad_action.triggered.connect(self._on_interpolate_bad_segments)
-        interpolate_bad_action.setEnabled(bool(self._current_bad_segments))
-        menu.addAction(interpolate_bad_action)
-
-        clear_bad_action = QAction("Clea&r Bad Segments", self)
-        clear_bad_action.triggered.connect(self._on_clear_bad_segments)
-        clear_bad_action.setEnabled(bool(self._current_bad_segments))
-        menu.addAction(clear_bad_action)
-
-        menu.addSeparator()
-
-        resample_action = QAction("&Resample...", self)
-        resample_action.triggered.connect(self._on_process_resample)
-        menu.addAction(resample_action)
-
-        crop_action = QAction("Cr&op...", self)
-        crop_action.triggered.connect(self._on_process_crop)
-        menu.addAction(crop_action)
 
         menu.addSeparator()
 
@@ -524,6 +533,10 @@ class MainWindow(QMainWindow):
         # Derived visualisation panels (channel view only, signal-type-specific)
         if self.current_view_level == "channel" and self.current_signal is not None:
             sig_type = self.current_signal.signal_type
+            has_peaks = (
+                self._current_peaks is not None
+                and self._current_peaks.num_peaks >= 2
+            )
             if sig_type in (SignalType.ECG, SignalType.PPG):
                 hr_action = QAction("Show &Heart Rate", self)
                 hr_action.setShortcut("H")
@@ -531,6 +544,19 @@ class MainWindow(QMainWindow):
                 hr_action.setChecked(self.single_channel_view.is_derived_visible())
                 hr_action.triggered.connect(self._on_view_toggle_heart_rate)
                 menu.addAction(hr_action)
+
+                menu.addSeparator()
+
+                overlay_action = QAction("Heartbeat &Overlay...", self)
+                overlay_action.setEnabled(has_peaks)
+                overlay_action.triggered.connect(self._on_view_heartbeat_overlay)
+                menu.addAction(overlay_action)
+
+                hist_action = QAction("RR Interval &Histogram...", self)
+                hist_action.setEnabled(has_peaks)
+                hist_action.triggered.connect(self._on_view_rr_histogram)
+                menu.addAction(hist_action)
+
             if sig_type == SignalType.EDA and self._eda_tonic is not None:
                 eda_action = QAction("Show &EDA Components", self)
                 eda_action.setShortcut("H")
@@ -862,6 +888,182 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.exception(f"Failed to load session: {e}")
             QMessageBox.critical(self, "Session Load Error", f"Failed to load session:\n{e}")
+
+    def _on_file_append(self):
+        """Append a continuation file to the currently loaded session.
+
+        Assumes the second file is a direct continuation of the first (e.g.,
+        after a crash or disconnection).  For each channel, file2's timestamps
+        are offset so the concatenated series is strictly continuous:
+
+            new_ts = file2_ts + ((file1_last_ts + 1/sr) - file2_first_ts)
+
+        Channels are matched by channel_name + signal_type, falling back to
+        signal_type only if names differ.  Unmatched channels are skipped with
+        a warning.  Events from file2 receive the same timestamp offset.
+        """
+        if self.current_session is None:
+            return
+
+        # Warn and confirm if in channel view (processing state will be lost)
+        if self.current_view_level == "channel":
+            reply = QMessageBox.question(
+                self,
+                "Append File",
+                "Appending a file will clear the current processing state and "
+                "return to the multi-signal view.\n\nContinue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Append Continuation File",
+            str(self.current_session.source_path.parent),
+            "Physiological Signal Files (*.xdf *.csv);;XDF Files (*.xdf);;CSV Files (*.csv);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+
+        path = Path(file_path)
+        try:
+            if path.suffix.lower() == ".csv":
+                loader = CsvLoader(signal_type=SignalType.UNKNOWN, auto_detect_type=True)
+            else:
+                loader = get_loader(path)
+            session2 = loader.load(path)
+        except Exception as e:
+            logger.error(f"Append: failed to load {path}: {e}")
+            QMessageBox.critical(self, "Load Error", f"Could not load file:\n{e}")
+            return
+
+        if not session2.signals:
+            QMessageBox.warning(self, "Append", "The selected file contains no signals.")
+            return
+
+        # ------------------------------------------------------------------
+        # Match and concatenate channels
+        # ------------------------------------------------------------------
+        appended_channels = 0
+        skipped: list[str] = []
+        ts_offset_for_events: float | None = None  # computed from first matched pair
+
+        for sig1 in self.current_session.signals:
+            # Prefer exact name+type match; fall back to type-only
+            sig2 = next(
+                (s for s in session2.signals
+                 if s.channel_name == sig1.channel_name
+                 and s.signal_type == sig1.signal_type),
+                None,
+            )
+            if sig2 is None:
+                sig2 = next(
+                    (s for s in session2.signals if s.signal_type == sig1.signal_type),
+                    None,
+                )
+
+            if sig2 is None:
+                skipped.append(
+                    f"'{sig1.channel_name}' ({sig1.signal_type.value}): "
+                    "no matching channel in second file"
+                )
+                continue
+
+            if abs(sig1.sampling_rate - sig2.sampling_rate) > 1.0:
+                skipped.append(
+                    f"'{sig1.channel_name}': sampling rate mismatch "
+                    f"({sig1.sampling_rate:.1f} vs {sig2.sampling_rate:.1f} Hz) — skipped"
+                )
+                continue
+
+            # Compute offset: file2 starts exactly one sample after file1 ends
+            dt = 1.0 / sig1.sampling_rate
+            ts_offset = (float(sig1.timestamps[-1]) + dt) - float(sig2.timestamps[0])
+
+            if ts_offset_for_events is None:
+                ts_offset_for_events = ts_offset
+
+            new_timestamps = sig2.timestamps + ts_offset
+            combined_samples = np.concatenate([sig1.samples, sig2.samples])
+            combined_timestamps = np.concatenate([sig1.timestamps, new_timestamps])
+
+            object.__setattr__(sig1, "samples", combined_samples)
+            object.__setattr__(sig1, "timestamps", combined_timestamps)
+            appended_channels += 1
+            logger.info(
+                f"Append: '{sig1.channel_name}' — "
+                f"{len(sig2.samples)} samples added, "
+                f"offset={ts_offset:.4f} s, "
+                f"total={len(combined_samples)} samples "
+                f"({combined_timestamps[-1] - combined_timestamps[0]:.1f} s)"
+            )
+
+        if appended_channels == 0:
+            QMessageBox.warning(
+                self, "Append",
+                "No channels could be matched between the two files.\n\n"
+                + "\n".join(skipped),
+            )
+            return
+
+        # ------------------------------------------------------------------
+        # Append events from file2 (offset to match signal continuity)
+        # ------------------------------------------------------------------
+        if session2.events and ts_offset_for_events is not None:
+            from cardio_signal_lab.core.data_models import EventData
+            new_events = [
+                EventData(
+                    timestamp=ev.timestamp + ts_offset_for_events,
+                    label=ev.label,
+                )
+                for ev in session2.events
+            ]
+            existing = list(self.current_session.events or [])
+            existing.extend(new_events)
+            object.__setattr__(self.current_session, "events", existing)
+            logger.info(f"Append: {len(new_events)} events added from second file")
+
+        # ------------------------------------------------------------------
+        # Clear per-channel state and refresh view
+        # ------------------------------------------------------------------
+        self._channel_state.clear()
+        self._current_peaks = None
+        self._raw_samples = None
+        self._eda_tonic = None
+        self._eda_phasic = None
+        self.pipeline.reset()
+        self._structural_ops.clear()
+        self.current_signal = None
+
+        # Navigate back to multi-signal view
+        self.current_view_level = "multi"
+        self.current_signal_type = None
+        self._came_from_type_view = False
+        self.stacked_widget.setCurrentWidget(self.multi_signal_view)
+        self.multi_signal_view.set_session(self.current_session)
+        self._build_menus()
+
+        # Status / warnings
+        if skipped:
+            QMessageBox.warning(
+                self, "Append — Some Channels Skipped",
+                "\n".join(skipped),
+            )
+
+        total_dur = max(
+            (sig.timestamps[-1] - sig.timestamps[0])
+            for sig in self.current_session.signals
+        )
+        self.statusBar().showMessage(
+            f"Appended {appended_channels} channel(s) from '{path.name}'  "
+            f"— total duration {total_dur:.1f} s",
+            0,
+        )
+        logger.info(
+            f"Append complete: {appended_channels} channels from '{path.name}', "
+            f"total duration {total_dur:.1f} s"
+        )
 
     def _show_metadata_dialog(self, session: RecordingSession):
         """Display file metadata in an info dialog."""
@@ -1855,6 +2057,231 @@ class MainWindow(QMainWindow):
             logger.error(f"EDA decompose failed: {e}")
             QMessageBox.critical(self, "Error", f"EDA decomposition failed:\n{e}")
 
+    def _on_process_standard(self):
+        """Run Standard Processing macro: crop -> resample 250 Hz -> NK clean -> detect peaks.
+
+        Step 1 (crop): trims to [signal_start, last_event_timestamp + 1 s].
+                       Skipped with a warning if no events are loaded.
+        Step 2 (resample): resamples to 250 Hz.  Skipped if already at 250 Hz.
+        Step 3 (NK clean): runs the signal-type-appropriate NeuroKit2 clean.
+        Step 4 (detect peaks): runs the signal-type-appropriate peak detector.
+
+        Each step records its operation in the structural ops / pipeline history
+        exactly as if the user had triggered it manually.
+        """
+        if self.current_signal is None:
+            return
+
+        sig_type = self.current_signal.signal_type
+        timestamps = self.current_signal.timestamps
+        t_start = float(timestamps[0])
+        t_end_signal = float(timestamps[-1])
+
+        # --- Gather events for crop ---
+        events = (self.current_session.events or []) if self.current_session else []
+        has_events = bool(events)
+        crop_end: float | None = None
+        if has_events:
+            last_event_t = max(ev.timestamp for ev in events)
+            crop_end = min(last_event_t + 1.0, t_end_signal)
+
+        # --- Build preview text ---
+        lines = []
+        if has_events and crop_end is not None:
+            lines.append(
+                f"1. Crop: {t_start:.2f} s  to  {crop_end:.2f} s  "
+                f"(last event {(crop_end - 1.0):.2f} s + 1 s)"
+            )
+        else:
+            lines.append("1. Crop: SKIPPED (no events loaded)")
+
+        current_sr = self.current_signal.sampling_rate
+        if abs(current_sr - 250.0) > 0.01:
+            lines.append(f"2. Resample: {current_sr:.1f} Hz -> 250 Hz")
+        else:
+            lines.append("2. Resample: SKIPPED (already 250 Hz)")
+
+        clean_label = {"ecg": "nk.ecg_clean()", "ppg": "nk.ppg_clean()"}.get(
+            sig_type.value.lower(), "?"
+        )
+        detect_label = {"ecg": "Detect R-Peaks", "ppg": "Detect Pulse Peaks"}.get(
+            sig_type.value.lower(), "?"
+        )
+        lines.append(f"3. Clean: {clean_label}")
+        lines.append(f"4. Detect peaks: {detect_label}")
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Standard Processing")
+        msg.setText("The following steps will be applied in order:\n\n" + "\n".join(lines))
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.Ok)
+        if msg.exec() != QMessageBox.StandardButton.Ok:
+            return
+
+        import scipy.signal as scipy_sig
+        import neurokit2 as nk
+        from cardio_signal_lab.core.data_models import ProcessingStep
+
+        try:
+            # ------------------------------------------------------------------
+            # Step 1: Crop
+            # ------------------------------------------------------------------
+            if has_events and crop_end is not None:
+                ts = self.current_signal.timestamps
+                start_idx = 0
+                end_idx = int(np.searchsorted(ts, crop_end, side="right"))
+                end_idx = max(end_idx, start_idx + 2)  # at least 2 samples
+
+                source = (
+                    self._raw_samples
+                    if self._raw_samples is not None
+                    else self.current_signal.samples
+                )
+                cropped_raw = source[start_idx:end_idx]
+                cropped_ts = ts[start_idx:end_idx]
+
+                # Adjust existing peaks into the crop window
+                if self._current_peaks and self._current_peaks.num_peaks > 0:
+                    mask = (
+                        (self._current_peaks.indices >= start_idx)
+                        & (self._current_peaks.indices < end_idx)
+                    )
+                    kept_idx = self._current_peaks.indices[mask] - start_idx
+                    kept_cls = self._current_peaks.classifications[mask]
+                    self._current_peaks = (
+                        PeakData(indices=kept_idx, classifications=kept_cls)
+                        if len(kept_idx) >= 1
+                        else None
+                    )
+
+                object.__setattr__(self.current_signal, "samples", cropped_raw.copy())
+                object.__setattr__(self.current_signal, "timestamps", cropped_ts)
+                self._raw_samples = cropped_raw.copy()
+                self._eda_tonic = None
+                self._eda_phasic = None
+                self.pipeline.reset()
+
+                self._structural_ops.append(ProcessingStep(
+                    operation="crop",
+                    parameters={
+                        "start": float(cropped_ts[0]),
+                        "end": float(cropped_ts[-1]),
+                        "n_samples": len(cropped_raw),
+                    },
+                ))
+                logger.info(
+                    f"Standard Processing — crop: {cropped_ts[0]:.2f} s "
+                    f"to {cropped_ts[-1]:.2f} s ({len(cropped_raw)} samples)"
+                )
+
+            # ------------------------------------------------------------------
+            # Step 2: Resample to 250 Hz
+            # ------------------------------------------------------------------
+            current_sr = self.current_signal.sampling_rate
+            target_sr = 250.0
+            if abs(current_sr - target_sr) > 0.01:
+                source = self._raw_samples if self._raw_samples is not None else self.current_signal.samples
+                old_n = len(source)
+                new_n = int(round(old_n * target_sr / current_sr))
+                resampled_raw = scipy_sig.resample(source, new_n)
+                ts_start = float(self.current_signal.timestamps[0])
+                ts_end = float(self.current_signal.timestamps[-1])
+                new_timestamps = np.linspace(ts_start, ts_end, new_n)
+
+                # Scale peak indices proportionally
+                if self._current_peaks and self._current_peaks.num_peaks > 0:
+                    scale = new_n / old_n
+                    new_indices = np.round(
+                        self._current_peaks.indices * scale
+                    ).astype(int)
+                    new_indices = np.clip(new_indices, 0, new_n - 1)
+                    self._current_peaks = PeakData(
+                        indices=new_indices,
+                        classifications=self._current_peaks.classifications.copy(),
+                    )
+
+                object.__setattr__(self.current_signal, "samples", resampled_raw.copy())
+                object.__setattr__(self.current_signal, "timestamps", new_timestamps)
+                object.__setattr__(self.current_signal, "sampling_rate", target_sr)
+                self._raw_samples = resampled_raw.copy()
+                self.pipeline.reset()
+
+                self._structural_ops.append(ProcessingStep(
+                    operation="resample",
+                    parameters={
+                        "original_sr": current_sr,
+                        "target_sr": target_sr,
+                        "n_samples": new_n,
+                    },
+                ))
+                logger.info(
+                    f"Standard Processing — resample: {current_sr:.1f} -> {target_sr:.1f} Hz"
+                )
+
+            # ------------------------------------------------------------------
+            # Step 3: NK clean (pipeline step)
+            # ------------------------------------------------------------------
+            self._ensure_raw_backup()
+            sr_int = int(self.current_signal.sampling_rate)
+
+            if sig_type == SignalType.ECG:
+                cleaned = nk.ecg_clean(self.current_signal.samples, sampling_rate=sr_int)
+                self.pipeline.add_step("ecg_clean", {})
+            else:  # PPG
+                cleaned = nk.ppg_clean(self.current_signal.samples, sampling_rate=sr_int)
+                self.pipeline.add_step("ppg_clean", {})
+
+            object.__setattr__(self.current_signal, "samples", cleaned)
+            logger.info(f"Standard Processing — NK clean ({sig_type.value})")
+
+            # ------------------------------------------------------------------
+            # Step 4: Detect peaks
+            # ------------------------------------------------------------------
+            if sig_type == SignalType.ECG:
+                from cardio_signal_lab.processing.peak_detection import detect_ecg_peaks
+                peak_indices = detect_ecg_peaks(
+                    self.current_signal.samples, self.current_signal.sampling_rate
+                )
+                self.pipeline.add_step("detect_ecg_peaks", {})
+            else:  # PPG
+                from cardio_signal_lab.processing.peak_detection import detect_ppg_peaks
+                peak_indices = detect_ppg_peaks(
+                    self.current_signal.samples, self.current_signal.sampling_rate
+                )
+                self.pipeline.add_step("detect_ppg_peaks", {})
+
+            classifications = np.full(
+                len(peak_indices), PeakClassification.AUTO.value, dtype=int
+            )
+            self._current_peaks = PeakData(
+                indices=peak_indices.astype(int),
+                classifications=classifications,
+            )
+            logger.info(
+                f"Standard Processing — {len(peak_indices)} peaks detected"
+            )
+
+            # ------------------------------------------------------------------
+            # Refresh view
+            # ------------------------------------------------------------------
+            self._refresh_processing_panel()
+            self.single_channel_view.set_signal(self.current_signal)
+            self.single_channel_view.set_peaks(self._current_peaks)
+            if self.current_session:
+                self.single_channel_view.set_events(self.current_session.events or [])
+            self.signals.peaks_updated.emit(self._current_peaks)
+            self._build_menus()
+
+            self.statusBar().showMessage(
+                f"Standard Processing complete — {self._peak_status(self._current_peaks)}", 0
+            )
+
+        except Exception as e:
+            logger.error(f"Standard Processing failed: {e}")
+            QMessageBox.critical(self, "Standard Processing Error", str(e))
+
     def _on_process_detect_peaks(self):
         """Handle Process > Detect Peaks."""
         if self.current_signal is None:
@@ -2640,6 +3067,26 @@ class MainWindow(QMainWindow):
             self._eda_phasic,
         )
         self.statusBar().showMessage("EDA components: tonic (SCL) and phasic (SCR)", 5000)
+
+    def _on_view_heartbeat_overlay(self):
+        """Open the heartbeat overlay plot dialog (ECG/PPG with peaks)."""
+        if self.current_signal is None or self._current_peaks is None:
+            return
+        from cardio_signal_lab.gui.analysis_plots import HeartbeatOverlayDialog
+        dlg = HeartbeatOverlayDialog(
+            self.current_signal, self._current_peaks, parent=self
+        )
+        dlg.exec()
+
+    def _on_view_rr_histogram(self):
+        """Open the RR interval histogram dialog (ECG/PPG with peaks)."""
+        if self.current_signal is None or self._current_peaks is None:
+            return
+        from cardio_signal_lab.gui.analysis_plots import RRHistogramDialog
+        dlg = RRHistogramDialog(
+            self.current_signal, self._current_peaks, parent=self
+        )
+        dlg.exec()
 
     # ---- Type-View Operations ----
 

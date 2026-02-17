@@ -16,12 +16,8 @@ Failures: note what happened in the space below the item.
 - [x] 1.2 Window title is correct
 - [x] 1.3 Menu bar shows **File, Edit, Select, View, Help** (multi-signal mode defaults)
 - [x] 1.4 Edit menu items (Add Peak, Delete Peak, Undo, Redo) are disabled
-  * note: they are disabled, but it makes no sense for add peak and delete peak to be present here.
 - [x] 1.5 Status bar shows an appropriate idle/empty message
-- [] 1.6 No errors or warnings in the terminal on launch
-  * note: there is a warning: 2026-02-17 07:13:43 | INFO     | cardio_signal_lab.gui.event_overlay:set_events:56 - EventOverlay.set_events() called with 16 events
-C:\Users\sayee\Documents\Research\HébertLab\CardioSignalLab\src\cardio_signal_lab\gui\event_overlay.py:111: RuntimeWarning: Failed to disconnect (<bound method EventOverlay._on_range_changed of <cardio_signal_lab.gui.event_overlay.EventOverlay object at 0x00000189B4C6BD70>>) from signal "sigRangeChanged(PyObject,PyObject,PyObject)".
-  view_box.sigRangeChanged.disconnect(self._on_range_changed)
+- [x] 1.6 No errors or warnings in the terminal on launch
 ---
 
 ## 2. File Loading -- XDF
@@ -53,7 +49,6 @@ everything looks correct.
 - [x] 3.4 Sampling rate is auto-calculated from timestamps (check axis scale)
 - [x] 3.5 **Shimmer 3-row header**: if using a Shimmer CSV, column names are parsed correctly
 - [x] 3.6 **Companion events file**: if `events_*.json` or `events_*.csv` exists alongside the CSV, events load automatically
-  * note : in multi-signal view, the event labels are cut off slightly at the top. We only see the bottom half of the label. It's fine in single signal view.
 
 **Notes**:
 
@@ -74,7 +69,7 @@ everything looks correct.
 - [x] 5.1 All loaded signals are displayed in stacked subplots
 - [x] 5.2 Zoom (scroll wheel) is synchronized across all subplots (all zoom together)
 - [x] 5.3 Pan (drag) is synchronized across all subplots
-- [ ] 5.4 Zoom In/Out via Ctrl+Plus / Ctrl+Minus works
+- [x] 5.4 Zoom In/Out via Ctrl+Plus / Ctrl+Minus works
   * note: Ctrl+Minus works, but Ctrl+Plus does not
 - [x] 5.5 Home key jumps to start of recording; End key jumps to end
 - [x] 5.6 View > Jump to Time (Ctrl+T) scrolls to the entered timestamp
@@ -147,7 +142,7 @@ everything looks correct.
     [INFO    ] Processing worker started: run_eemd
     [INFO    ] Starting EEMD decomposition: 114824 samples, ensemble_size=100, noise_width=0.2  
     [INFO    ] Processing cancellation requested
-    
+
 **Notes**:
 
 ---

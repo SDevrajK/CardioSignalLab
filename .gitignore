@@ -4,6 +4,12 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.pyo
+
+# Virtual environments
+venv/
+env/
+.venv/
 
 # Testing/Coverage
 .coverage
@@ -20,3 +26,15 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code (dev session notes - not for public repo)
+CLAUDE.md
+
+# Scratch/debug scripts at project root
+test_pyqtgraph_minimal.py
+test_simple.py
+
+# Data files (not committed - too large or sensitive)
+data/
+*.xdf
+*.csl.json
