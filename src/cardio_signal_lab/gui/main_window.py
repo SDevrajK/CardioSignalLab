@@ -1001,10 +1001,31 @@ class MainWindow(QMainWindow):
     def _on_edit_redo(self):
         self.single_channel_view.redo()
 
+    @staticmethod
+    def _peak_status(peak_data) -> str:
+        """One-line peak breakdown for the status bar.
+
+        Example: '847 peaks  auto=820  manual=12  ectopic=8  bad=7'
+        """
+        p = peak_data
+        parts = [f"{p.num_peaks} peaks"]
+        if p.num_auto:
+            parts.append(f"auto={p.num_auto}")
+        if p.num_manual:
+            parts.append(f"manual={p.num_manual}")
+        if p.num_ectopic:
+            parts.append(f"ectopic={p.num_ectopic}")
+        if p.num_bad:
+            parts.append(f"bad={p.num_bad}")
+        return "  ".join(parts)
+
     def _on_peaks_changed(self, peak_data):
         """Sync peak data from the editor back to MainWindow state."""
         self._current_peaks = peak_data
         self.signals.peaks_updated.emit(peak_data)
+
+        # Show live breakdown in the status bar
+        self.statusBar().showMessage(self._peak_status(peak_data), 0)
 
         # Auto-refresh heart rate panel if it is visible (ECG/PPG only)
         if (
@@ -1498,8 +1519,9 @@ class MainWindow(QMainWindow):
             # Initialize interactive peak editor + overlay
             self.single_channel_view.set_peaks(self._current_peaks)
             self.signals.peaks_updated.emit(self._current_peaks)
+            self._build_menus()  # Show Heart Rate action now that peaks exist
             self.statusBar().showMessage(
-                f"Detected {len(peak_indices)} peaks ({sig_type.value.upper()})", 5000
+                f"{sig_type.value.upper()} — {self._peak_status(self._current_peaks)}", 0
             )
 
         except Exception as e:
