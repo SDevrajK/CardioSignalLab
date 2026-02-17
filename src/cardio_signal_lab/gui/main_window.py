@@ -83,9 +83,12 @@ class MainWindow(QMainWindow):
 
         # Processing state (active channel)
         self.pipeline = ProcessingPipeline()
-        self._raw_samples: np.ndarray | None = None  # Original unprocessed signal
+        self._raw_samples: np.ndarray | None = None  # Baseline signal for pipeline replay
         self._current_peaks: PeakData | None = None
         self._processing_worker: ProcessingWorker | None = None
+        # Structural ops (crop / resample) that have been applied directly to the
+        # raw signal and cannot be replayed or reverted by the pipeline.
+        self._structural_ops: list = []
 
         # Derived visualization state (active channel)
         self._eda_tonic: np.ndarray | None = None   # Tonic (SCL) component from eda_process()
@@ -402,6 +405,16 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
 
+        resample_action = QAction("&Resample...", self)
+        resample_action.triggered.connect(self._on_process_resample)
+        menu.addAction(resample_action)
+
+        crop_action = QAction("Cr&op...", self)
+        crop_action.triggered.connect(self._on_process_crop)
+        menu.addAction(crop_action)
+
+        menu.addSeparator()
+
         reset_action = QAction("&Reset Processing", self)
         reset_action.triggered.connect(self._on_process_reset)
         menu.addAction(reset_action)
@@ -585,11 +598,12 @@ class MainWindow(QMainWindow):
         """Snapshot active processing/peak state for the given channel."""
         key = self._channel_key(signal)
         self._channel_state[key] = {
-            "peaks": self._current_peaks,          # PeakData (immutable after edit)
-            "pipeline_steps": list(self.pipeline.steps),  # ProcessingStep refs are read-only
-            "raw_samples": self._raw_samples,       # ndarray ref; never mutated in-place
+            "peaks": self._current_peaks,
+            "pipeline_steps": list(self.pipeline.steps),
+            "raw_samples": self._raw_samples,
             "eda_tonic": self._eda_tonic,
             "eda_phasic": self._eda_phasic,
+            "structural_ops": list(self._structural_ops),
         }
         n_peaks = self._current_peaks.num_peaks if self._current_peaks else 0
         logger.debug(
@@ -616,6 +630,12 @@ class MainWindow(QMainWindow):
             key = self._channel_key(signal)
             saved = self._channel_state.get(key)
 
+            # Always clear the overlay before restoring or starting fresh.
+            # Without this, the previous channel's peaks remain visible when
+            # returning to a channel whose saved state has no peaks.
+            self.single_channel_view.clear_peaks()
+            self.single_channel_view.clear_derived()
+
             if saved is not None:
                 # Returning to a previously visited channel — restore state
                 self._current_peaks = saved["peaks"]
@@ -623,7 +643,7 @@ class MainWindow(QMainWindow):
                 self._eda_tonic = saved["eda_tonic"]
                 self._eda_phasic = saved["eda_phasic"]
                 self.pipeline.steps = list(saved["pipeline_steps"])
-                self.single_channel_view.clear_derived()
+                self._structural_ops = list(saved.get("structural_ops", []))
             else:
                 # First visit to this channel — clean slate
                 self.pipeline.reset()
@@ -631,8 +651,7 @@ class MainWindow(QMainWindow):
                 self._current_peaks = None
                 self._eda_tonic = None
                 self._eda_phasic = None
-                self.single_channel_view.clear_peaks()
-                self.single_channel_view.clear_derived()
+                self._structural_ops = []
                 self.processing_panel.clear()
 
         # Always re-render (rebuilds LOD renderer, resets view range)
@@ -644,7 +663,7 @@ class MainWindow(QMainWindow):
 
         # Sync processing panel
         if self.pipeline.num_steps > 0:
-            self.processing_panel.update_steps(self.pipeline.steps)
+            self._refresh_processing_panel()
 
         # Pass events
         if self.current_session:
@@ -727,13 +746,16 @@ class MainWindow(QMainWindow):
                 session = loader.load(path)
                 self.current_session = session
                 self._channel_state.clear()  # Discard per-channel state from any previous file
+                self._structural_ops.clear()
 
                 self._show_metadata_dialog(session)
                 self.signals.file_loaded.emit(session)
 
-                # Go to multi-signal view
+                # Go to multi-signal view (rebuilds menus with session-dependent actions enabled)
                 if self.current_view_level != "multi":
                     self._on_return_to_multi()
+                else:
+                    self._build_menus()  # Already in multi view — still need to re-enable actions
 
                 logger.info(f"File loaded: {session.num_signals} signals")
 
@@ -787,10 +809,12 @@ class MainWindow(QMainWindow):
                 )
                 logger.info(f"Restored {self._current_peaks.num_peaks} peaks from session")
 
-            # Go to multi-signal view
+            # Go to multi-signal view (rebuilds menus with session-dependent actions enabled)
             self.signals.file_loaded.emit(session)
             if self.current_view_level != "multi":
                 self._on_return_to_multi()
+            else:
+                self._build_menus()
 
             QMessageBox.information(
                 self, "Session Loaded",
@@ -1037,6 +1061,24 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Import Error", f"Could not load events:\n{e}")
             return
 
+        # Apply the same LSL zero-reference offset used when loading the XDF so that
+        # imported event timestamps align with the zero-referenced signal x-axis.
+        lsl_t0 = self.current_session.lsl_t0_reference or 0.0
+        if lsl_t0 != 0.0:
+            from cardio_signal_lab.core.data_models import EventData as _EventData
+            events = [
+                _EventData(
+                    timestamp=ev.timestamp - lsl_t0,
+                    label=ev.label,
+                    duration=ev.duration,
+                    metadata=ev.metadata,
+                )
+                for ev in events
+            ]
+            logger.info(
+                f"Applied lsl_t0_reference offset ({lsl_t0:.3f} s) to {len(events)} imported events"
+            )
+
         # Replace events on the session and refresh every active view
         object.__setattr__(self.current_session, "events", events)
 
@@ -1057,7 +1099,8 @@ class MainWindow(QMainWindow):
             return
 
         current_events = self.current_session.events or []
-        dialog = EventEditorDialog(current_events, parent=self)
+        lsl_t0 = self.current_session.lsl_t0_reference or 0.0
+        dialog = EventEditorDialog(current_events, lsl_t0_reference=lsl_t0, parent=self)
 
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -1175,6 +1218,10 @@ class MainWindow(QMainWindow):
 
     # ---- Process Operations ----
 
+    def _refresh_processing_panel(self):
+        """Sync the processing panel with current structural ops + pipeline steps."""
+        self.processing_panel.update_combined(self._structural_ops, self.pipeline.steps)
+
     def _ensure_raw_backup(self):
         """Ensure we have a backup of the raw signal before processing."""
         if self._raw_samples is None and self.current_signal is not None:
@@ -1195,9 +1242,10 @@ class MainWindow(QMainWindow):
         if self.current_session:
             self.single_channel_view.set_events(self.current_session.events or [])
 
-        n_steps = self.pipeline.num_steps
-        self.processing_panel.update_steps(self.pipeline.steps)
-        self.statusBar().showMessage(f"Processing applied ({n_steps} steps)", 3000)
+        self._refresh_processing_panel()
+        self.statusBar().showMessage(
+            f"Processing applied ({self.pipeline.num_steps} steps)", 3000
+        )
 
     def _on_process_filter(self):
         """Handle Process > Bandpass Filter."""
@@ -1429,16 +1477,24 @@ class MainWindow(QMainWindow):
         progress.setMinimumDuration(0)
         progress.show()
 
-        # Run EEMD in background thread
-        from cardio_signal_lab.processing.eemd import eemd_artifact_removal
+        # Run EEMD decomposition in background thread.
+        # The worker returns (imfs, residue); reconstruction happens after the
+        # user reviews and confirms IMF selection in the dialog.
+        from cardio_signal_lab.processing.eemd import (
+            eemd_decompose,
+            analyze_imf_characteristics,
+            auto_select_artifact_imfs,
+            reconstruct_from_imfs,
+        )
+        from cardio_signal_lab.gui.imf_selection_dialog import ImfSelectionDialog
 
         # Get current processed signal (pipeline applied up to now)
         current_samples = self.current_signal.samples.copy()
         sr = self.current_signal.sampling_rate
 
         def run_eemd():
-            return eemd_artifact_removal(
-                current_samples, sr,
+            return eemd_decompose(
+                current_samples,
                 ensemble_size=ensemble_size,
                 noise_width=noise_width,
                 random_seed=config.processing.random_seed,
@@ -1450,22 +1506,47 @@ class MainWindow(QMainWindow):
         def on_finished(result):
             progress.close()
             self._processing_worker = None
-            # Store EEMD result directly (not through pipeline replay since EEMD
-            # depends on the current signal state, not raw)
+
+            imfs, residue = result
+            characteristics = analyze_imf_characteristics(imfs, sr)
+            auto_excluded   = auto_select_artifact_imfs(characteristics)
+
+            sel_dialog = ImfSelectionDialog(
+                imfs=imfs,
+                residue=residue,
+                characteristics=characteristics,
+                auto_excluded=auto_excluded,
+                sampling_rate=sr,
+                parent=self,
+            )
+
+            if sel_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.info("EEMD: IMF selection cancelled — signal unchanged")
+                return
+
+            exclude_imfs = sel_dialog.get_excluded_imfs()
+            reconstructed = reconstruct_from_imfs(imfs, residue, exclude_imfs=exclude_imfs)
+
+            # EEMD is order-dependent on the input state, so we apply it directly
+            # rather than through the pipeline replay mechanism.
             self.pipeline.add_step("eemd_artifact_removal", {
                 "ensemble_size": ensemble_size,
                 "noise_width": noise_width,
+                "exclude_imfs": exclude_imfs,
             })
-            # For EEMD, we replace raw_samples with the result and rebuild pipeline
-            # knowledge. Since EEMD is order-dependent on the input state,
-            # we apply it directly to the current signal.
-            object.__setattr__(self.current_signal, "samples", result)
+            object.__setattr__(self.current_signal, "samples", reconstructed)
             self.single_channel_view.set_signal(self.current_signal)
             if self.current_session:
                 self.single_channel_view.set_events(self.current_session.events or [])
-            self.processing_panel.update_steps(self.pipeline.steps)
-            self.statusBar().showMessage("EEMD artifact removal complete", 5000)
-            logger.info("EEMD artifact removal applied to signal")
+            self._refresh_processing_panel()
+            n_excl  = len(exclude_imfs)
+            n_total = imfs.shape[0]
+            self.statusBar().showMessage(
+                f"EEMD complete: excluded {n_excl}/{n_total} IMFs", 5000
+            )
+            logger.info(
+                f"EEMD artifact removal applied: excluded IMFs {exclude_imfs}"
+            )
 
         def on_error(msg):
             progress.close()
@@ -1495,7 +1576,7 @@ class MainWindow(QMainWindow):
             self.single_channel_view.set_signal(self.current_signal)
             if self.current_session:
                 self.single_channel_view.set_events(self.current_session.events or [])
-            self.processing_panel.update_steps(self.pipeline.steps)
+            self._refresh_processing_panel()
             self.statusBar().showMessage("ECG cleaned (NeuroKit2)", 3000)
             logger.info("Applied nk.ecg_clean()")
         except Exception as e:
@@ -1520,7 +1601,7 @@ class MainWindow(QMainWindow):
             self.single_channel_view.set_signal(self.current_signal)
             if self.current_session:
                 self.single_channel_view.set_events(self.current_session.events or [])
-            self.processing_panel.update_steps(self.pipeline.steps)
+            self._refresh_processing_panel()
             self.statusBar().showMessage("PPG cleaned (NeuroKit2)", 3000)
             logger.info("Applied nk.ppg_clean()")
         except Exception as e:
@@ -1536,16 +1617,16 @@ class MainWindow(QMainWindow):
 
         self._ensure_raw_backup()
         try:
-            cleaned = nk.eda_clean(
+            cleaned = np.asarray(nk.eda_clean(
                 self.current_signal.samples,
                 sampling_rate=int(self.current_signal.sampling_rate),
-            )
+            ))
             self.pipeline.add_step("eda_clean", {})
             object.__setattr__(self.current_signal, "samples", cleaned)
             self.single_channel_view.set_signal(self.current_signal)
             if self.current_session:
                 self.single_channel_view.set_events(self.current_session.events or [])
-            self.processing_panel.update_steps(self.pipeline.steps)
+            self._refresh_processing_panel()
             self.statusBar().showMessage("EDA cleaned (NeuroKit2)", 3000)
             logger.info("Applied nk.eda_clean()")
         except Exception as e:
@@ -1593,24 +1674,30 @@ class MainWindow(QMainWindow):
 
         self._ensure_raw_backup()
         try:
-            signals_df, _ = nk.eda_process(
-                self.current_signal.samples,
-                sampling_rate=int(self.current_signal.sampling_rate),
-                method=method,
-            )
+            sr = int(self.current_signal.sampling_rate)
+            # Step 1: Clean with the default neurokit method (lowpass filter).
+            # The decomposition method is separate from the cleaning method —
+            # passing "highpass"/"cvxEDA"/"sparse" directly to eda_process()
+            # would be misinterpreted as the cleaning method.
+            cleaned = np.asarray(nk.eda_clean(
+                self.current_signal.samples, sampling_rate=sr
+            ))
+            # Step 2: Decompose into tonic/phasic with the user-chosen method.
+            # nk.eda_phasic() returns a DataFrame with EDA_Tonic and EDA_Phasic columns.
+            components = nk.eda_phasic(cleaned, sampling_rate=sr, method=method)
             # Store both components so the derived panel can display them together
-            self._eda_tonic = signals_df["EDA_Tonic"].to_numpy()
-            self._eda_phasic = signals_df["EDA_Phasic"].to_numpy()
+            self._eda_tonic = np.asarray(components["EDA_Tonic"])
+            self._eda_phasic = np.asarray(components["EDA_Phasic"])
 
             col = "EDA_Phasic" if component == "phasic" else "EDA_Tonic"
-            result = signals_df[col].to_numpy()
+            result = np.asarray(components[col])
 
             self.pipeline.add_step("eda_decompose", {"component": component, "method": method})
             object.__setattr__(self.current_signal, "samples", result)
             self.single_channel_view.set_signal(self.current_signal)
             if self.current_session:
                 self.single_channel_view.set_events(self.current_session.events or [])
-            self.processing_panel.update_steps(self.pipeline.steps)
+            self._refresh_processing_panel()
             self.statusBar().showMessage(
                 f"EDA decomposed: showing {component} component ({method})", 5000
             )
@@ -1667,30 +1754,310 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Peak detection failed:\n{e}")
             self.statusBar().clearMessage()
 
+    def _on_process_resample(self):
+        """Handle Process > Resample — change signal sampling rate."""
+        if self.current_signal is None:
+            return
+
+        current_sr = self.current_signal.sampling_rate
+        n_samples = len(self.current_signal.samples)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Resample Signal")
+        layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel(f"Current: {current_sr:.1f} Hz  ({n_samples} samples)"))
+
+        if self._current_peaks and self._current_peaks.num_peaks > 0:
+            layout.addRow(QLabel(
+                f"Note: {self._current_peaks.num_peaks} peak(s) will be rescaled.\n"
+                "Verify positions after resampling."
+            ))
+
+        target_spin = QDoubleSpinBox()
+        target_spin.setDecimals(1)
+        target_spin.setRange(1.0, 10000.0)
+        target_spin.setValue(current_sr)
+        target_spin.setSuffix(" Hz")
+        layout.addRow("Target rate:", target_spin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        target_sr = target_spin.value()
+        if abs(target_sr - current_sr) < 0.01:
+            return
+
+        import pandas as pd
+
+        # Resample from raw (pre-pipeline) so pipeline steps can be re-applied.
+        # Use pandas time-grid resampling + linear interpolation to match the
+        # behaviour of the original processing pipeline (mean-bin then interpolate).
+        # This produces a sample count determined by actual signal duration, not a
+        # sample-count ratio, which avoids the drift that FFT resampling introduces.
+        source = self._raw_samples if self._raw_samples is not None else self.current_signal.samples
+        source_timestamps = self.current_signal.timestamps
+
+        t_start = float(source_timestamps[0])
+        period_ms = 1000.0 / target_sr
+        period_str = f"{period_ms}ms"
+
+        td_index = pd.to_timedelta(source_timestamps - t_start, unit="s")
+        series = pd.Series(source, index=td_index)
+        resampled_series = series.resample(period_str).mean().interpolate(method="linear")
+
+        resampled_raw = resampled_series.values.astype(np.float64)
+        new_timestamps = t_start + resampled_series.index.total_seconds().values
+        new_n = len(resampled_raw)
+
+        # Scale peak indices proportionally to the new sample count
+        if self._current_peaks and self._current_peaks.num_peaks > 0:
+            scale = new_n / len(source)
+            new_indices = np.round(self._current_peaks.indices * scale).astype(int)
+            new_indices = np.clip(new_indices, 0, new_n - 1)
+            self._current_peaks = PeakData(
+                indices=new_indices,
+                classifications=self._current_peaks.classifications.copy(),
+            )
+
+        # Update signal structure; reset pipeline (subsequent filters are now stale)
+        object.__setattr__(self.current_signal, "samples", resampled_raw.copy())
+        object.__setattr__(self.current_signal, "timestamps", new_timestamps)
+        object.__setattr__(self.current_signal, "sampling_rate", float(target_sr))
+        self._raw_samples = resampled_raw.copy()
+        self._eda_tonic = None
+        self._eda_phasic = None
+        self.pipeline.reset()
+
+        # Record as a permanent structural op (shown in panel, warned on Reset)
+        from cardio_signal_lab.core.data_models import ProcessingStep
+        self._structural_ops.append(ProcessingStep(
+            operation="resample",
+            parameters={
+                "original_sr": current_sr,
+                "target_sr": target_sr,
+                "n_samples": new_n,
+            },
+        ))
+        self._refresh_processing_panel()
+
+        self.single_channel_view.set_signal(self.current_signal)
+        if self._current_peaks is not None:
+            self.single_channel_view.set_peaks(self._current_peaks)
+        if self.current_session:
+            self.single_channel_view.set_events(self.current_session.events or [])
+
+        self.statusBar().showMessage(
+            f"Resampled: {current_sr:.1f} Hz -> {target_sr:.1f} Hz  ({new_n} samples)", 5000
+        )
+        logger.info(f"Signal resampled from {current_sr:.1f} to {target_sr:.1f} Hz")
+
+    def _on_process_crop(self):
+        """Handle Process > Crop — trim signal to a time range or between two events."""
+        if self.current_signal is None:
+            return
+
+        timestamps = self.current_signal.timestamps
+        t_start = float(timestamps[0])
+        t_end = float(timestamps[-1])
+
+        events = (self.current_session.events or []) if self.current_session else []
+        # Only keep events within the signal range
+        events_in_range = [ev for ev in events if t_start <= ev.timestamp <= t_end]
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Crop Signal")
+        layout = QFormLayout(dialog)
+
+        layout.addRow(QLabel(f"Signal range: {t_start:.3f} s  to  {t_end:.3f} s"))
+
+        # Event quick-select combos (populate only when events are available)
+        _MANUAL = "(manual)"
+        event_labels = [_MANUAL] + [
+            f"{ev.label}  @ {ev.timestamp:.3f} s" for ev in events_in_range
+        ]
+
+        from_event_combo = QComboBox()
+        from_event_combo.addItems(event_labels)
+        if events_in_range:
+            layout.addRow("Start from event:", from_event_combo)
+
+        start_spin = QDoubleSpinBox()
+        start_spin.setDecimals(3)
+        start_spin.setRange(t_start, t_end)
+        start_spin.setValue(t_start)
+        start_spin.setSuffix(" s")
+        start_spin.setSingleStep(1.0)
+        layout.addRow("Crop start:", start_spin)
+
+        to_event_combo = QComboBox()
+        to_event_combo.addItems(event_labels)
+        if events_in_range:
+            layout.addRow("End at event:", to_event_combo)
+
+        end_spin = QDoubleSpinBox()
+        end_spin.setDecimals(3)
+        end_spin.setRange(t_start, t_end)
+        end_spin.setValue(t_end)
+        end_spin.setSuffix(" s")
+        end_spin.setSingleStep(1.0)
+        layout.addRow("Crop end:", end_spin)
+
+        # Wire event combos to fill the spinboxes
+        def _on_from_event(idx):
+            if idx > 0:
+                start_spin.setValue(events_in_range[idx - 1].timestamp)
+
+        def _on_to_event(idx):
+            if idx > 0:
+                end_spin.setValue(events_in_range[idx - 1].timestamp)
+
+        from_event_combo.currentIndexChanged.connect(_on_from_event)
+        to_event_combo.currentIndexChanged.connect(_on_to_event)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        crop_start = start_spin.value()
+        crop_end = end_spin.value()
+
+        if crop_start >= crop_end:
+            QMessageBox.warning(self, "Invalid Range", "Crop start must be before crop end.")
+            return
+
+        start_idx = int(np.searchsorted(timestamps, crop_start, side="left"))
+        end_idx = int(np.searchsorted(timestamps, crop_end, side="right"))
+
+        if end_idx - start_idx < 2:
+            QMessageBox.warning(self, "Too Short", "Crop range contains fewer than 2 samples.")
+            return
+
+        # Crop from the raw (pre-pipeline) signal so Reset still works correctly
+        source = self._raw_samples if self._raw_samples is not None else self.current_signal.samples
+        cropped_raw = source[start_idx:end_idx]
+        cropped_timestamps = timestamps[start_idx:end_idx]
+
+        # Adjust peak indices: keep only peaks inside the crop range, re-zero indices
+        if self._current_peaks and self._current_peaks.num_peaks > 0:
+            mask = (
+                (self._current_peaks.indices >= start_idx)
+                & (self._current_peaks.indices < end_idx)
+            )
+            kept_indices = self._current_peaks.indices[mask] - start_idx
+            kept_cls = self._current_peaks.classifications[mask]
+            if len(kept_indices) >= 1:
+                self._current_peaks = PeakData(
+                    indices=kept_indices, classifications=kept_cls
+                )
+                logger.info(
+                    f"Crop: kept {len(kept_indices)} of "
+                    f"{self._current_peaks.num_peaks + int(np.sum(~mask))} peaks"
+                )
+            else:
+                self._current_peaks = None
+                logger.info("Crop: all peaks fell outside crop range — cleared")
+
+        # Update signal structure; reset pipeline (subsequent filters are now stale)
+        object.__setattr__(self.current_signal, "samples", cropped_raw.copy())
+        object.__setattr__(self.current_signal, "timestamps", cropped_timestamps)
+        self._raw_samples = cropped_raw.copy()
+        self._eda_tonic = None
+        self._eda_phasic = None
+        self.pipeline.reset()
+
+        # Record as a permanent structural op (shown in panel, warned on Reset)
+        from cardio_signal_lab.core.data_models import ProcessingStep
+        self._structural_ops.append(ProcessingStep(
+            operation="crop",
+            parameters={
+                "start": crop_start,
+                "end": crop_end,
+                "n_samples": len(cropped_raw),
+            },
+        ))
+        self._refresh_processing_panel()
+
+        self.single_channel_view.set_signal(self.current_signal)
+        if self._current_peaks is not None:
+            self.single_channel_view.set_peaks(self._current_peaks)
+        else:
+            self.single_channel_view.clear_peaks()
+        if self.current_session:
+            self.single_channel_view.set_events(self.current_session.events or [])
+
+        duration = float(cropped_timestamps[-1] - cropped_timestamps[0])
+        self.statusBar().showMessage(
+            f"Cropped to {crop_start:.2f}s - {crop_end:.2f}s  "
+            f"({duration:.2f}s, {len(cropped_raw)} samples)", 5000
+        )
+        logger.info(
+            f"Signal cropped: [{crop_start:.2f}, {crop_end:.2f}] s  "
+            f"({len(cropped_raw)} samples)"
+        )
+
     def _on_process_reset(self):
-        """Handle Process > Reset Processing - revert to raw signal."""
-        if self._raw_samples is None:
+        """Handle Process > Reset Processing - revert to raw signal.
+
+        Clears all pipeline (filter) steps and restores _raw_samples.
+        Structural ops (crop, resample) are displayed as permanent and cannot
+        be reverted — the user is warned if any are present.
+        """
+        if self._raw_samples is None and not self._structural_ops and not self.pipeline.steps:
             self.statusBar().showMessage("No processing to reset", 3000)
             return
 
         if self.current_signal is None:
             return
 
-        # Restore raw samples
-        object.__setattr__(self.current_signal, "samples", self._raw_samples.copy())
+        # Warn if structural ops exist — signal cannot be restored to its original
+        # pre-crop / pre-resample state because that data is no longer held in memory.
+        if self._structural_ops:
+            op_names = ", ".join(
+                ("Crop" if s.operation == "crop" else "Resample")
+                for s in self._structural_ops
+            )
+            QMessageBox.warning(
+                self,
+                "Cannot Revert Structural Operations",
+                f"The following operation(s) cannot be reverted:\n\n"
+                f"  {op_names}\n\n"
+                f"Crop and Resample change the signal length and are applied "
+                f"directly to the stored raw data.  The original signal is no "
+                f"longer held in memory.\n\n"
+                f"Reset will clear any filters applied AFTER these operations, "
+                f"reverting to the most-recent cropped/resampled state.",
+            )
+
+        if self._raw_samples is not None:
+            object.__setattr__(self.current_signal, "samples", self._raw_samples.copy())
+
         self.pipeline.reset()
+        self._structural_ops.clear()
         self._current_peaks = None
         self._eda_tonic = None
         self._eda_phasic = None
 
-        # Refresh plot
         self.single_channel_view.set_signal(self.current_signal)
         if self.current_session:
             self.single_channel_view.set_events(self.current_session.events or [])
 
         self.single_channel_view.clear_derived()
         self.processing_panel.clear()
-        self.statusBar().showMessage("Processing reset to raw signal", 3000)
+        self.statusBar().showMessage("Processing reset", 3000)
         logger.info("Processing pipeline reset")
 
     # ---- View Operations ----

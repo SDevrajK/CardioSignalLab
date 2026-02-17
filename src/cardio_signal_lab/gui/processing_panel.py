@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QDockWidget, QListWidget, QListWidgetItem, QWidget, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from loguru import logger
 
 
@@ -27,6 +28,9 @@ _OPERATION_LABELS: dict[str, str] = {
     "detect_ecg_peaks": "Detect R-Peaks",
     "detect_ppg_peaks": "Detect Pulse Peaks",
     "detect_eda_features": "Detect SCR Peaks",
+    # Structural operations (change signal length — cannot be pipeline-replayed)
+    "crop": "Crop",
+    "resample": "Resample",
 }
 
 
@@ -46,7 +50,17 @@ def _format_step(idx: int, step) -> str:
 
     param_parts: list[str] = []
 
-    if op == "bandpass":
+    if op == "crop":
+        param_parts = [
+            f"{params.get('start', '?'):.3f}s - {params.get('end', '?'):.3f}s",
+            f"{params.get('n_samples', '?')} samples",
+        ]
+    elif op == "resample":
+        param_parts = [
+            f"{params.get('original_sr', '?'):.1f} -> {params.get('target_sr', '?'):.1f} Hz",
+            f"{params.get('n_samples', '?')} samples",
+        ]
+    elif op == "bandpass":
         param_parts = [
             f"{params.get('lowcut', '?')}-{params.get('highcut', '?')} Hz",
             f"order {params.get('order', '?')}",
@@ -145,6 +159,60 @@ class ProcessingPanel(QDockWidget):
             self._list.addItem(QListWidgetItem(text))
 
         logger.debug(f"ProcessingPanel updated: {len(steps)} steps")
+
+    def update_combined(self, structural_steps: list, pipeline_steps: list):
+        """Show structural ops (crop/resample) then filter pipeline steps.
+
+        Structural steps are shown in orange/italic to indicate they are
+        permanent and cannot be undone by Reset Processing.  A divider
+        separates structural from subsequent filter steps.
+
+        Args:
+            structural_steps: List of structural ProcessingStep objects
+                              (crop, resample — applied directly to raw signal)
+            pipeline_steps:   List of ProcessingStep objects from the pipeline
+        """
+        self._list.clear()
+
+        has_structural = bool(structural_steps)
+        has_pipeline   = bool(pipeline_steps)
+
+        if not has_structural and not has_pipeline:
+            self._empty_label.show()
+            self._list.hide()
+            return
+
+        self._empty_label.hide()
+        self._list.show()
+
+        idx = 1
+
+        for step in structural_steps:
+            text = _format_step(idx, step) + "  [permanent]"
+            item = QListWidgetItem(text)
+            item.setForeground(QColor("#b05a00"))   # dark orange
+            item.setToolTip(
+                "Structural operation: changes signal length/timestamps.\n"
+                "Cannot be reverted by Reset Processing."
+            )
+            self._list.addItem(item)
+            idx += 1
+
+        if has_structural and has_pipeline:
+            sep = QListWidgetItem("--- filters applied after structural ops ---")
+            sep.setForeground(QColor("#999999"))
+            sep.setFlags(sep.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            self._list.addItem(sep)
+
+        for step in pipeline_steps:
+            text = _format_step(idx, step)
+            self._list.addItem(QListWidgetItem(text))
+            idx += 1
+
+        logger.debug(
+            f"ProcessingPanel updated: {len(structural_steps)} structural, "
+            f"{len(pipeline_steps)} pipeline steps"
+        )
 
     def clear(self):
         """Clear all steps (e.g. when switching to a new channel)."""

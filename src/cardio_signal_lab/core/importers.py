@@ -173,10 +173,39 @@ def load_peaks_binary_csv(path: Path | str, signal_length: int) -> PeakData:
 
     logger.debug(f"Using '{peak_col}' as peaks column from {path.name}")
 
-    binary = df[peak_col].to_numpy()
+    # Coerce to float so that string "0"/"1" and boolean True/False all compare
+    # correctly with == 1.  errors='coerce' turns unparseable cells into NaN.
+    binary = pd.to_numeric(df[peak_col], errors="coerce").fillna(0).to_numpy()
+
+    # Validate length: the binary array must have exactly one entry per signal
+    # sample.  A mismatch means the CSV was generated at a different sampling
+    # rate; peak indices would then map to wrong timestamps (spread out or
+    # compressed) and many may fall outside the signal bounds.
+    csv_length = len(binary)
+    if csv_length != signal_length:
+        logger.warning(
+            f"Peak CSV row count ({csv_length}) does not match signal length "
+            f"({signal_length}) — difference of {csv_length - signal_length} samples.  "
+            f"Peak indices will be scaled by {signal_length}/{csv_length} "
+            f"= {signal_length/csv_length:.6f} to correct for the sampling rate difference."
+        )
+
     indices = np.where(binary == 1)[0].astype(int)
 
-    # Bounds check
+    # If the CSV and signal have different lengths (same duration, different effective
+    # sampling rates due to resampling rounding), scale the peak indices so they map
+    # to the correct timestamps in the signal.  Without this, peaks drift progressively
+    # earlier/later as the index grows.
+    if csv_length != signal_length:
+        scale = signal_length / csv_length
+        indices = np.round(indices * scale).astype(int)
+    logger.debug(
+        f"Binary peak column: {csv_length} rows, {len(indices)} peaks "
+        f"(values seen: {np.unique(binary[:100]).tolist()})"
+    )
+
+    # Bounds check (should not trigger after the length check above, but kept
+    # as a safety net for edge cases such as a partial signal crop).
     out_of_range = indices[indices >= signal_length]
     if len(out_of_range) > 0:
         logger.warning(

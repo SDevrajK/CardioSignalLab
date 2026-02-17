@@ -51,6 +51,13 @@ This project was born from a brainstorm session about evolving EKG Peak Correcto
 ### Future: Reconstruction Module
 - [ ] Port v2 reconstruction as optional plugin
 
+### Future: Processing Panel Improvements
+- [ ] Per-step removal from processing pipeline: right-click context menu on the
+      Processing Panel to remove any individual step and re-apply remaining steps
+      from `_raw_samples`. Requires adding `remove_step(idx)` to `ProcessingPipeline`
+      and making the panel list interactive. Structural ops (crop/resample) remain
+      non-removable since the pre-operation signal is not held in memory.
+
 ## Source Code Locations
 
 | Component | Source |

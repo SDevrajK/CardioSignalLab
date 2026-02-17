@@ -37,7 +37,7 @@ class PeakClassification(Enum):
 
     AUTO = 0  # Auto-detected (blue) - from NeuroKit2
     MANUAL = 1  # Manually added (green) - user double-click
-    ECTOPIC = 2  # Ectopic beat (orange) - user marked
+    ECTOPIC = 2  # Ectopic beat (magenta) - user marked
     BAD = 3  # Bad/incorrect (red) - artifact
 
 
@@ -129,7 +129,7 @@ class PeakData:
     Classifications:
     - AUTO (0): Auto-detected by NeuroKit2 (blue)
     - MANUAL (1): User-added via double-click (green)
-    - ECTOPIC (2): User-marked ectopic beat (orange)
+    - ECTOPIC (2): User-marked ectopic beat (magenta)
     - BAD (3): User-marked as artifact (red)
     """
 
@@ -174,10 +174,12 @@ class EventData:
     """Event marker with timestamp and label.
 
     Represents experimental events (e.g., baseline_start, stimulus_onset)
-    with timestamps aligned to signal data.
+    with timestamps aligned to signal data.  Timestamps are zero-referenced
+    relative to the recording start (lsl_t0_reference) and may be negative
+    if an event was sent before the physiological signal stream began.
     """
 
-    timestamp: float = field(validator=[attrs.validators.instance_of(float), _validate_positive_or_zero])
+    timestamp: float = field(validator=attrs.validators.instance_of(float))
     label: str = field(validator=attrs.validators.instance_of(str))
     duration: float | None = field(default=None, validator=attrs.validators.optional(attrs.validators.instance_of(float)))
     metadata: dict[str, Any] = field(factory=dict, validator=attrs.validators.instance_of(dict))
@@ -209,6 +211,8 @@ class SignalData:
     # Optional metadata
     unit: str = field(default="", validator=attrs.validators.instance_of(str))
     quality: np.ndarray | None = field(default=None, validator=attrs.validators.optional(_validate_ndarray_1d))
+    # Raw LSL timestamps (absolute clock values, before zero-referencing); None for CSV files
+    lsl_timestamps: np.ndarray | None = field(default=None, validator=attrs.validators.optional(_validate_ndarray_1d))
 
     def __attrs_post_init__(self):
         """Validate samples and timestamps have same length."""
@@ -332,6 +336,9 @@ class RecordingSession:
     events: list[EventData] = field(factory=list, validator=attrs.validators.instance_of(list))
     derived_signals: list[DerivedSignalData] = field(factory=list, validator=attrs.validators.instance_of(list))
     metadata: dict[str, Any] = field(factory=dict, validator=attrs.validators.instance_of(dict))
+    # First LSL timestamp of the primary physiological signal stream.
+    # Used as the common zero-reference for both signal and event timestamps in XDF files.
+    lsl_t0_reference: float | None = field(default=None, validator=attrs.validators.optional(attrs.validators.instance_of(float)))
 
     @property
     def num_signals(self) -> int:

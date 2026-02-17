@@ -129,13 +129,26 @@ class XdfLoader:
         if not streams:
             raise ValueError(f"No streams found in XDF file: {path}")
 
+        # Determine LSL t0 reference from the first physiological signal stream.
+        # All subsequent streams and event markers are zero-referenced to this value
+        # so that everything shares the same time axis.
+        lsl_t0_reference: float | None = None
+        for stream in streams:
+            if not isinstance(stream["time_series"], list):  # physiological stream
+                lsl_t0_reference = float(stream["time_stamps"][0])
+                logger.debug(f"LSL t0 reference: {lsl_t0_reference:.6f} s (absolute LSL clock)")
+                break
+
+        if lsl_t0_reference is None:
+            raise ValueError(f"No physiological signal streams found in XDF file: {path}")
+
         # Extract signals from streams (skip marker streams)
         signals = []
         for stream in streams:
             # Skip event/marker streams (they have time_series as list, not array)
             if isinstance(stream["time_series"], list):
                 continue
-            signal_list = self._extract_signals_from_stream(stream)
+            signal_list = self._extract_signals_from_stream(stream, lsl_t0_reference)
             signals.extend(signal_list)
 
         if not signals:
@@ -143,10 +156,15 @@ class XdfLoader:
 
         logger.info(f"Loaded {len(signals)} signals from XDF file")
 
-        # Extract events from marker streams
-        events = self._extract_events_from_streams(streams)
+        # Extract events from marker streams, zero-referenced to the same LSL t0
+        events = self._extract_events_from_streams(streams, lsl_t0_reference)
 
-        return RecordingSession(source_path=path, signals=signals, events=events)
+        return RecordingSession(
+            source_path=path,
+            signals=signals,
+            events=events,
+            lsl_t0_reference=lsl_t0_reference,
+        )
 
     def _load_xdf_streams(self, path: Path) -> tuple:
         """Load XDF streams with selective loading.
@@ -185,11 +203,13 @@ class XdfLoader:
         logger.info(f"Loaded {len(streams)} streams from XDF")
         return streams, header
 
-    def _extract_signals_from_stream(self, stream: dict) -> list[SignalData]:
+    def _extract_signals_from_stream(self, stream: dict, lsl_t0_reference: float) -> list[SignalData]:
         """Extract SignalData objects from an XDF stream.
 
         Args:
             stream: XDF stream dict
+            lsl_t0_reference: First LSL timestamp of the primary signal stream.
+                Used to zero-reference all timestamps to a common time axis.
 
         Returns:
             List of SignalData objects (one per channel)
@@ -208,8 +228,10 @@ class XdfLoader:
         # Detect signal type from stream metadata (used as fallback)
         stream_signal_type = self._detect_signal_type(stream["info"])
 
-        # Extract timestamps (use device timestamps if available, otherwise LSL)
-        timestamps = self._extract_timestamps(stream)
+        # Use raw LSL timestamps as the authoritative time axis.
+        # Zero-reference to the common lsl_t0_reference so all streams share the same origin.
+        lsl_timestamps = stream["time_stamps"].astype(np.float64)
+        timestamps = lsl_timestamps - lsl_t0_reference
 
         # Validate timestamps
         if not self._validate_timestamps(timestamps, stream_name):
@@ -256,40 +278,12 @@ class XdfLoader:
                     timestamps=timestamps,
                     channel_name=channel_name,
                     signal_type=channel_type,
+                    lsl_timestamps=lsl_timestamps,
                 )
                 signals.append(signal)
 
         logger.debug(f"Extracted {len(signals)} signals from stream '{stream_name}'")
         return signals
-
-    def _extract_timestamps(self, stream: dict) -> np.ndarray:
-        """Extract timestamps from stream.
-
-        Uses device timestamps if available (first column of time_series),
-        otherwise falls back to LSL timestamps. Aligns to start at t=0.
-
-        Args:
-            stream: XDF stream dict
-
-        Returns:
-            1D array of timestamps in seconds, starting at 0
-        """
-        # Check if first column looks like device timestamps (in milliseconds)
-        time_series = stream["time_series"]
-        if time_series.shape[1] > 1:
-            first_col = time_series[:, 0]
-            # Device timestamps are typically large values in milliseconds
-            if np.mean(first_col) > 1000:
-                timestamps = first_col / 1000.0  # Convert ms to seconds
-                timestamps = timestamps - timestamps[0]  # Align to t=0
-                logger.debug("Using device timestamps from first column (aligned to t=0)")
-                return timestamps.astype(np.float64)
-
-        # Fall back to LSL timestamps
-        timestamps = stream["time_stamps"].astype(np.float64)
-        timestamps = timestamps - timestamps[0]  # Align to t=0
-        logger.debug("Using LSL timestamps (aligned to t=0)")
-        return timestamps
 
     def _extract_channel_names(self, stream_info: dict) -> list[str]:
         """Extract channel names from stream info.
@@ -349,14 +343,19 @@ class XdfLoader:
             logger.warning(f"Unknown signal type for stream: name='{stream_name}', type='{stream_type}'")
             return SignalType.UNKNOWN
 
-    def _extract_events_from_streams(self, streams: list) -> list[EventData]:
+    def _extract_events_from_streams(self, streams: list, lsl_t0_reference: float) -> list[EventData]:
         """Extract event markers from XDF streams.
 
         Looks for streams with type "Markers" or similar event streams.
         Event streams typically have nominal_srate=0 and time_series as list of markers.
 
+        All event timestamps are zero-referenced using lsl_t0_reference (the first LSL
+        timestamp of the physiological signal stream), so events and signals share the
+        same time axis.
+
         Args:
             streams: List of XDF streams
+            lsl_t0_reference: First LSL timestamp of the primary physiological signal stream.
 
         Returns:
             List of EventData objects
@@ -383,13 +382,11 @@ class XdfLoader:
 
             logger.info(f"Found event stream: {stream_name} with {len(time_series)} events")
 
-            # Convert timestamps to numpy array and align to t=0
+            # Zero-reference using the physiological signal's first LSL timestamp.
+            # Do NOT use the event stream's own first timestamp — that would misalign events.
             time_stamps = np.array(time_stamps, dtype=np.float64)
-
-            # XDF LSL timestamps are always in seconds (absolute epoch time)
-            # Just align to t=0 (same as signals)
-            time_stamps = time_stamps - time_stamps[0]
-            logger.debug(f"Aligned event timestamps to t=0 (range: {time_stamps[0]:.2f}s to {time_stamps[-1]:.2f}s)")
+            time_stamps = time_stamps - lsl_t0_reference
+            logger.debug(f"Event timestamps zero-referenced to signal LSL t0 (range: {time_stamps[0]:.3f}s to {time_stamps[-1]:.3f}s)")
 
             # Extract events
             for i, (marker, timestamp) in enumerate(zip(time_series, time_stamps)):

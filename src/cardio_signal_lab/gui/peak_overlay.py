@@ -25,7 +25,7 @@ class PeakOverlay:
     Renders peaks as scatter plot markers with color coding by classification:
     - Blue: Auto-detected (AUTO)
     - Green: Manually-added (MANUAL)
-    - Orange: Ectopic beat (ECTOPIC)
+    - Magenta: Ectopic beat (ECTOPIC)
     - Red: Bad/artifact (BAD)
     - Yellow: Selected peak highlight
 

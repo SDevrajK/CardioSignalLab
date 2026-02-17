@@ -177,6 +177,26 @@ class SignalPlotWidget(pg.PlotWidget):
 
         return color_map.get(signal_type, "#000000")  # Default to black
 
+    def wheelEvent(self, event):
+        """Pan left/right on scroll wheel instead of zooming.
+
+        Scroll up (positive delta) pans earlier in time; scroll down pans later.
+        Pan step is 10% of the current visible range per wheel notch.
+        """
+        vb = self.plotItem.getViewBox()
+        (x_min, x_max), _ = vb.viewRange()
+        view_width = x_max - x_min
+
+        delta = event.angleDelta().y()
+        if delta == 0:
+            event.ignore()
+            return
+
+        # 120 units = 1 standard wheel notch; negative delta pans right
+        pan_amount = 0.1 * view_width * (-delta / 120.0)
+        vb.setXRange(x_min + pan_amount, x_max + pan_amount, padding=0)
+        event.accept()
+
     def _on_range_changed(self, view_box, ranges):
         """Handle ViewBox range change (zoom/pan).
 

@@ -115,7 +115,7 @@ class GUIConfig:
     # Peak marker colors (classification-based)
     peak_color_auto: str = field(default="blue", validator=attrs.validators.instance_of(str))  # Auto-detected
     peak_color_manual: str = field(default="green", validator=attrs.validators.instance_of(str))  # User-added
-    peak_color_ectopic: str = field(default="orange", validator=attrs.validators.instance_of(str))  # Ectopic beat
+    peak_color_ectopic: str = field(default="magenta", validator=attrs.validators.instance_of(str))  # Ectopic beat
     peak_color_bad: str = field(default="red", validator=attrs.validators.instance_of(str))  # Bad/artifact
     peak_color_selected: str = field(default="yellow", validator=attrs.validators.instance_of(str))  # Selected highlight
 

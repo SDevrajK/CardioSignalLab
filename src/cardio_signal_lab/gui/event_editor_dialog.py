@@ -84,10 +84,17 @@ class EventEditorDialog(QDialog):
     COL_TIME_ADJ = 1   # read-only
     COL_LABEL = 2
 
-    def __init__(self, events: list[EventData], parent=None):
+    def __init__(self, events: list[EventData], lsl_t0_reference: float = 0.0, parent=None):
+        """
+        Args:
+            events: Current event list (timestamps are zero-referenced relative times).
+            lsl_t0_reference: First LSL timestamp of the physiological signal stream.
+                Pre-filled as t0 so the raw column shows original absolute LSL timestamps.
+        """
         super().__init__(parent)
+        self._lsl_t0_reference = lsl_t0_reference
         self.setWindowTitle("Event Editor")
-        self.resize(680, 500)
+        self.resize(680, 520)
 
         layout = QVBoxLayout(self)
 
@@ -96,11 +103,17 @@ class EventEditorDialog(QDialog):
             "Edit events, or paste rows from Excel / LibreOffice (Ctrl+V).  "
             "Multi-column pastes auto-detect time and label columns from headers.  "
             "Use 'Swap Columns' when time and label are reversed.  "
-            "Set t0 to subtract a zero-reference offset from all times."
+            "The raw column shows original LSL timestamps; adjusted = raw - t0 is what gets saved."
         )
         lbl = QLabel(help_text)
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
+
+        # LSL reference info (read-only display)
+        if lsl_t0_reference != 0.0:
+            ref_label = QLabel(f"LSL reference (t0): {lsl_t0_reference:.6f} s  (first LSL timestamp of the signal stream)")
+            ref_label.setStyleSheet("color: #555; font-style: italic; padding: 2px 0;")
+            layout.addWidget(ref_label)
 
         # t0 offset row
         offset_row = QHBoxLayout()
@@ -108,12 +121,12 @@ class EventEditorDialog(QDialog):
         self.offset_spin = QDoubleSpinBox()
         self.offset_spin.setDecimals(4)
         self.offset_spin.setRange(-1e9, 1e9)
-        self.offset_spin.setValue(0.0)
+        self.offset_spin.setValue(lsl_t0_reference)
         self.offset_spin.setSuffix(" s")
         self.offset_spin.setToolTip(
             "Subtract this value from every raw time entry.\n"
-            "Set to the recording start time to zero-reference\n"
-            "timestamps pasted from the original recording."
+            "Pre-filled with the LSL reference so that the adjusted column\n"
+            "is zero-referenced relative to the start of the recording."
         )
         offset_row.addWidget(self.offset_spin)
         note = QLabel("  adjusted = raw \u2212 t0  (saved column)")
@@ -244,7 +257,10 @@ class EventEditorDialog(QDialog):
     def _populate(self, events: list[EventData]):
         self.table.setRowCount(0)
         for ev in sorted(events, key=lambda e: e.timestamp):
-            self._append_row(str(ev.timestamp), ev.label)
+            # Show original absolute LSL timestamp in the raw column so the user can
+            # see the unmodified event time.  adjusted = raw - t0 gives the saved value.
+            raw_lsl = ev.timestamp + self._lsl_t0_reference
+            self._append_row(f"{raw_lsl:.6g}", ev.label)
 
     def _add_empty_row(self):
         row = self.table.rowCount()
