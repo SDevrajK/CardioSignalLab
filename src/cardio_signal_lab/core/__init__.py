@@ -21,6 +21,7 @@ from .exporter import (
     save_processing_parameters,
 )
 from .file_loader import CsvLoader, XdfLoader, detect_signal_type_from_name, get_loader
+from .importers import load_events_csv, load_peaks_binary_csv
 from .session import load_session, save_session
 
 __all__ = [
@@ -46,4 +47,6 @@ __all__ = [
     "save_processing_parameters",
     "save_session",
     "load_session",
+    "load_events_csv",
+    "load_peaks_binary_csv",
 ]

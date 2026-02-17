@@ -36,6 +36,8 @@ from cardio_signal_lab.core import (
     export_npy,
     export_annotations,
     save_processing_parameters,
+    load_events_csv,
+    load_peaks_binary_csv,
 )
 from cardio_signal_lab.gui.multi_signal_view import MultiSignalView
 from cardio_signal_lab.gui.signal_type_view import SignalTypeView
@@ -235,6 +237,20 @@ class MainWindow(QMainWindow):
         export_action.setShortcut(get_keysequence("file_export"))
         export_action.triggered.connect(self._on_file_export)
         menu.addAction(export_action)
+
+        menu.addSeparator()
+
+        import_events_action = QAction("Import &Events (CSV)...", self)
+        import_events_action.triggered.connect(self._on_file_import_events)
+        import_events_action.setEnabled(self.current_session is not None)
+        menu.addAction(import_events_action)
+
+        import_peaks_action = QAction("Import &Peaks (CSV)...", self)
+        import_peaks_action.triggered.connect(self._on_file_import_peaks)
+        import_peaks_action.setEnabled(
+            self.current_view_level == "channel" and self.current_signal is not None
+        )
+        menu.addAction(import_peaks_action)
 
         menu.addSeparator()
 
@@ -992,6 +1008,99 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.exception(f"Failed to export: {e}")
             QMessageBox.critical(self, "Export Error", f"Failed to export:\n{e}")
+
+    def _on_file_import_events(self):
+        """Handle File > Import Events — replace session events from a CSV file."""
+        if self.current_session is None:
+            QMessageBox.warning(self, "No Session", "Load a file first.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Events (CSV)",
+            str(self.current_session.source_path.parent),
+            "CSV Files (*.csv);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            events = load_events_csv(Path(file_path))
+        except Exception as e:
+            logger.exception(f"Failed to load events: {e}")
+            QMessageBox.critical(self, "Import Error", f"Could not load events:\n{e}")
+            return
+
+        # Replace events on the session and refresh every active view
+        object.__setattr__(self.current_session, "events", events)
+
+        # multi_signal_view reads events through set_session; rebuild it with updated session
+        self.multi_signal_view.set_session(self.current_session)
+        self.signal_type_view.set_events(events)
+        self.single_channel_view.set_events(events)
+
+        self.statusBar().showMessage(
+            f"Imported {len(events)} events from {Path(file_path).name}", 5000
+        )
+        logger.info(f"Replaced session events with {len(events)} from {file_path}")
+
+    def _on_file_import_peaks(self):
+        """Handle File > Import Peaks — load pre-corrected peaks from a binary CSV."""
+        if self.current_signal is None:
+            QMessageBox.warning(
+                self, "No Signal",
+                "Navigate to a single-channel view before importing peaks."
+            )
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Corrected Peaks (CSV)",
+            str(self.current_session.source_path.parent) if self.current_session else str(Path.home()),
+            "CSV Files (*.csv);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            peak_data = load_peaks_binary_csv(
+                Path(file_path),
+                signal_length=len(self.current_signal.samples),
+            )
+        except Exception as e:
+            logger.exception(f"Failed to load peaks: {e}")
+            QMessageBox.critical(self, "Import Error", f"Could not load peaks:\n{e}")
+            return
+
+        if peak_data.num_peaks == 0:
+            QMessageBox.warning(
+                self, "No Peaks Found",
+                f"The file contained no peaks (no 1-values in the peaks column).\n\n"
+                f"File: {Path(file_path).name}"
+            )
+            return
+
+        # Confirm before overwriting any existing peaks
+        if self._current_peaks is not None and self._current_peaks.num_peaks > 0:
+            reply = QMessageBox.question(
+                self, "Replace Peaks?",
+                f"This channel already has {self._current_peaks.num_peaks} peaks.\n"
+                f"Replace them with {peak_data.num_peaks} imported peaks?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        self._current_peaks = peak_data
+        self.single_channel_view.set_peaks(peak_data)
+        self.signals.peaks_updated.emit(peak_data)
+        self._build_menus()
+        self.statusBar().showMessage(
+            f"Imported {self._peak_status(peak_data)} from {Path(file_path).name}", 0
+        )
+        logger.info(
+            f"Imported {peak_data.num_peaks} peaks from {file_path}"
+        )
 
     # ---- Edit Operations ----
 
