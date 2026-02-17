@@ -14,6 +14,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from cardio_signal_lab.core import PeakData, SignalData
 
+from cardio_signal_lab.core.data_models import PeakClassification
+
+# Only AUTO and MANUAL peaks are normal beats; ECTOPIC and BAD are excluded
+# from heart rate calculation (treated like deleted peaks).
+_VALID_CLASSIFICATIONS = {PeakClassification.AUTO.value, PeakClassification.MANUAL.value}
+
 
 def compute_heart_rate(
     signal: SignalData,
@@ -22,6 +28,10 @@ def compute_heart_rate(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute instantaneous heart/pulse rate from inter-peak intervals.
 
+    Only AUTO and MANUAL peaks contribute to the calculation. ECTOPIC and BAD
+    peaks are excluded — they are treated like deleted peaks so that artifact
+    beats do not distort the displayed heart rate or rolling average.
+
     Args:
         signal: SignalData providing timestamps for peak positions
         peaks: PeakData with detected peak indices
@@ -29,16 +39,27 @@ def compute_heart_rate(
 
     Returns:
         Tuple of (times, bpm, rolling_bpm):
-          - times: midpoint timestamps between consecutive peaks (N-1,)
+          - times: midpoint timestamps between consecutive valid peaks (N-1,)
           - bpm: instantaneous rate at each interval in beats per minute (N-1,)
           - rolling_bpm: rolling-average BPM over `rolling_window` beats (N-1,)
-        All arrays are empty if fewer than 2 peaks are available.
+        All arrays are empty if fewer than 2 valid peaks are available.
     """
     if peaks.num_peaks < 2:
         logger.debug("compute_heart_rate: fewer than 2 peaks, returning empty arrays")
         return np.array([]), np.array([]), np.array([])
 
-    peak_times = signal.timestamps[peaks.indices]
+    # Filter to AUTO and MANUAL peaks only
+    valid_mask = np.isin(peaks.classifications, list(_VALID_CLASSIFICATIONS))
+    valid_indices = peaks.indices[valid_mask]
+    n_excluded = peaks.num_peaks - int(valid_mask.sum())
+    if n_excluded > 0:
+        logger.debug(f"compute_heart_rate: excluded {n_excluded} ECTOPIC/BAD peaks")
+
+    if len(valid_indices) < 2:
+        logger.debug("compute_heart_rate: fewer than 2 valid peaks after filtering")
+        return np.array([]), np.array([]), np.array([])
+
+    peak_times = signal.timestamps[valid_indices]
     rr = np.diff(peak_times)  # inter-peak intervals in seconds
 
     # Guard against zero or negative intervals (e.g. duplicate indices)

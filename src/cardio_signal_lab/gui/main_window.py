@@ -445,9 +445,8 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
 
-        # Toggle events
+        # Toggle events (no single-letter shortcut — E is reserved for ectopic classification)
         toggle_events_action = QAction("Toggle Event Markers", self)
-        toggle_events_action.setShortcut("E")
         toggle_events_action.triggered.connect(self._on_view_toggle_events)
         menu.addAction(toggle_events_action)
 
