@@ -314,17 +314,15 @@ def export_intervals(
     # Optional event annotation: label of the most recent event before each
     # interval midpoint (or "before_first_event" if none has started yet)
     if events:
-        event_times = np.array([e.timestamp for e in events])
-        event_labels_arr = [e.label for e in events]
+        sorted_events = sorted(events, key=lambda e: e.timestamp)
+        event_times = np.array([e.timestamp for e in sorted_events])
+        event_labels_arr = np.array([e.label for e in sorted_events])
         midpoints = (p1_times + p2_times) / 2.0
 
-        interval_event_labels = []
-        for mid in midpoints:
-            preceding = np.where(event_times <= mid)[0]
-            if len(preceding) == 0:
-                interval_event_labels.append("before_first_event")
-            else:
-                interval_event_labels.append(event_labels_arr[preceding[-1]])
+        idx = np.searchsorted(event_times, midpoints, side="right") - 1
+        interval_event_labels = np.where(
+            idx >= 0, event_labels_arr[idx], "before_first_event"
+        )
         df["event_label"] = interval_event_labels
 
     if mode == "rr":
