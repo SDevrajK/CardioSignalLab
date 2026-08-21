@@ -22,7 +22,13 @@ from .exporter import (
     export_npy,
     save_processing_parameters,
 )
-from .file_loader import CsvLoader, XdfLoader, detect_signal_type_from_name, get_loader
+from .file_loader import (
+    CsvLoader,
+    EdfLoader,
+    XdfLoader,
+    detect_signal_type_from_name,
+    get_loader,
+)
 from .importers import load_events_csv, load_peaks_binary_csv
 from .session import load_session, save_session
 
@@ -42,6 +48,7 @@ __all__ = [
     "create_l2_norm",
     "XdfLoader",
     "CsvLoader",
+    "EdfLoader",
     "detect_signal_type_from_name",
     "get_loader",
     "export_csv",

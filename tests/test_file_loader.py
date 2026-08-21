@@ -7,6 +7,7 @@ import pytest
 
 from cardio_signal_lab.core import (
     CsvLoader,
+    EdfLoader,
     SignalType,
     XdfLoader,
     get_loader,
@@ -71,6 +72,16 @@ class TestGetLoader:
         """Test that get_loader returns CsvLoader for .csv files."""
         loader = get_loader(Path("test.csv"))
         assert isinstance(loader, CsvLoader)
+
+    def test_get_loader_edf(self):
+        """Test that get_loader returns EdfLoader for .edf files."""
+        loader = get_loader(Path("test.edf"))
+        assert isinstance(loader, EdfLoader)
+
+    def test_get_loader_bdf(self):
+        """Test that get_loader returns EdfLoader for .bdf files."""
+        loader = get_loader(Path("test.bdf"))
+        assert isinstance(loader, EdfLoader)
 
     def test_get_loader_unsupported_extension(self):
         """Test that get_loader raises error for unsupported file types."""
@@ -233,6 +244,190 @@ class TestXdfLoader:
         # Verify signal type detection worked
         for signal in session.signals:
             assert signal.signal_type in [SignalType.ECG, SignalType.PPG, SignalType.EDA, SignalType.UNKNOWN]
+
+
+class TestEdfLoader:
+    """Tests for EdfLoader (EDF/EDF+/BDF via edfio)."""
+
+    @staticmethod
+    def _write_edf(path: Path, *, bdf: bool = False, annotations=None):
+        """Write a minimal EDF or BDF file with ECG and PPG signals.
+
+        Args:
+            path: Destination path
+            bdf: Write BDF (24-bit) instead of EDF
+            annotations: Optional list of edfio.EdfAnnotation to embed
+
+        Returns:
+            Sampling rate used (Hz)
+        """
+        import edfio
+
+        sampling_rate = 100.0
+        n = 200
+        t = np.arange(n) / sampling_rate
+        ecg = np.sin(2 * np.pi * 1.2 * t)
+        ppg = np.sin(2 * np.pi * 1.0 * t)
+
+        signal_class = edfio.BdfSignal if bdf else edfio.EdfSignal
+        signals = [
+            signal_class(ecg, sampling_rate, label="ECG", physical_dimension="uV"),
+            signal_class(ppg, sampling_rate, label="PPG", physical_dimension="uV"),
+        ]
+
+        if bdf:
+            edfio.Bdf(signals, annotations=annotations).write(path)
+        else:
+            edfio.Edf(signals, annotations=annotations).write(path)
+
+        return sampling_rate
+
+    def test_edf_loader_can_load(self):
+        """Test that EdfLoader identifies EDF/BDF files only."""
+        loader = EdfLoader()
+        assert loader.can_load(Path("test.edf")) is True
+        assert loader.can_load(Path("test.EDF")) is True
+        assert loader.can_load(Path("test.bdf")) is True
+        assert loader.can_load(Path("test.BDF")) is True
+        assert loader.can_load(Path("test.csv")) is False
+        assert loader.can_load(Path("test.xdf")) is False
+
+    def test_edf_loader_file_not_found(self):
+        """Test that loading non-existent file raises FileNotFoundError."""
+        loader = EdfLoader()
+        with pytest.raises(FileNotFoundError):
+            loader.load(Path("nonexistent_file.edf"))
+
+    def test_edf_loader_load_signals(self, tmp_path):
+        """Test loading EDF signals with type detection and uniform timestamps."""
+        edf_path = tmp_path / "test.edf"
+        sampling_rate = self._write_edf(edf_path)
+
+        loader = EdfLoader()
+        session = loader.load(edf_path)
+
+        assert session.num_signals == 2
+        assert session.source_path == edf_path
+
+        channel_names = {sig.channel_name for sig in session.signals}
+        assert channel_names == {"ECG", "PPG"}
+
+        for signal in session.signals:
+            assert signal.sampling_rate == pytest.approx(sampling_rate)
+            assert signal.signal_type == {
+                "ECG": SignalType.ECG,
+                "PPG": SignalType.PPG,
+            }[signal.channel_name]
+            assert len(signal.samples) == len(signal.timestamps)
+            assert np.all(np.diff(signal.timestamps) > 0)
+
+    def test_edf_loader_load_bdf(self, tmp_path):
+        """Test that BDF files load the same way as EDF."""
+        bdf_path = tmp_path / "test.bdf"
+        self._write_edf(bdf_path, bdf=True)
+
+        loader = EdfLoader()
+        session = loader.load(bdf_path)
+
+        assert session.num_signals == 2
+        assert any(s.signal_type == SignalType.ECG for s in session.signals)
+        assert any(s.signal_type == SignalType.PPG for s in session.signals)
+
+    def test_edf_loader_annotations_to_events(self, tmp_path):
+        """Test that EDF+ annotations are mapped to EventData."""
+        import edfio
+
+        annotations = [
+            edfio.EdfAnnotation(onset=1.5, duration=2.0, text="stim_on"),
+            edfio.EdfAnnotation(onset=3.0, duration=None, text="stim_off"),
+        ]
+        edf_path = tmp_path / "annotated.edf"
+        self._write_edf(edf_path, annotations=annotations)
+
+        loader = EdfLoader()
+        session = loader.load(edf_path)
+
+        assert len(session.events) == 2
+        assert session.events[0].timestamp == pytest.approx(1.5)
+        assert session.events[0].label == "stim_on"
+        assert session.events[0].duration == pytest.approx(2.0)
+        assert session.events[1].label == "stim_off"
+        assert session.events[1].duration is None
+
+    def test_edf_loader_skips_empty_channels(self, tmp_path):
+        """Test that all-zero channels are skipped."""
+        import edfio
+
+        sampling_rate = 100.0
+        n = 200
+        t = np.arange(n) / sampling_rate
+        ecg = np.sin(2 * np.pi * 1.2 * t)
+
+        signals = [
+            edfio.EdfSignal(ecg, sampling_rate, label="ECG", physical_dimension="uV"),
+            edfio.EdfSignal(np.zeros(n), sampling_rate, label="EMPTY", physical_dimension="uV"),
+        ]
+        edf_path = tmp_path / "empty_channel.edf"
+        edfio.Edf(signals).write(edf_path)
+
+        loader = EdfLoader()
+        session = loader.load(edf_path)
+
+        assert session.num_signals == 1
+        assert session.signals[0].channel_name == "ECG"
+
+    def test_edf_loader_filters_unknown_channels(self, tmp_path):
+        """Test that unrecognized channels (EEG, RRI) are dropped by default."""
+        import edfio
+
+        sampling_rate = 100.0
+        n = 200
+        t = np.arange(n) / sampling_rate
+        signals = [
+            edfio.EdfSignal(np.sin(2 * np.pi * 1.2 * t), sampling_rate, label="ECG"),
+            edfio.EdfSignal(np.sin(2 * np.pi * 0.1 * t), sampling_rate, label="Fp1"),
+            edfio.EdfSignal(np.full(n, 850.0), sampling_rate, label="RRI"),
+        ]
+        edf_path = tmp_path / "mixed_channels.edf"
+        edfio.Edf(signals).write(edf_path)
+
+        loader = EdfLoader()
+        session = loader.load(edf_path)
+
+        assert session.num_signals == 1
+        assert session.signals[0].channel_name == "ECG"
+        assert session.signals[0].signal_type == SignalType.ECG
+        assert "Fp1" in loader.filtered_channels
+        assert "RRI" in loader.filtered_channels
+        assert loader.skipped_streams == []
+
+    def test_edf_loader_include_unknown(self, tmp_path):
+        """Test that include_unknown=True keeps unrecognized channels."""
+        import edfio
+
+        sampling_rate = 100.0
+        n = 200
+        t = np.arange(n) / sampling_rate
+        signals = [
+            edfio.EdfSignal(np.sin(2 * np.pi * 1.2 * t), sampling_rate, label="ECG"),
+            edfio.EdfSignal(np.sin(2 * np.pi * 0.1 * t), sampling_rate, label="Fp1"),
+        ]
+        edf_path = tmp_path / "mixed_channels.edf"
+        edfio.Edf(signals).write(edf_path)
+
+        loader = EdfLoader(include_unknown=True)
+        session = loader.load(edf_path)
+
+        assert session.num_signals == 2
+        types = {s.channel_name: s.signal_type for s in session.signals}
+        assert types["ECG"] == SignalType.ECG
+        assert types["Fp1"] == SignalType.UNKNOWN
+
+    def test_edf_loader_implements_protocol(self):
+        """Test that EdfLoader implements can_load and load methods."""
+        loader = EdfLoader()
+        assert callable(loader.can_load)
+        assert callable(loader.load)
 
 
 class TestFileLoaderProtocol:

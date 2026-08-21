@@ -1015,7 +1015,7 @@ class MainWindow(QMainWindow):
             self,
             "Open Physiological Signal File or Session",
             str(self._last_open_dir),
-            "All Supported Files (*.xdf *.csv *.csl.json);;Session Files (*.csl.json);;Physiological Signal Files (*.xdf *.csv);;XDF Files (*.xdf);;CSV Files (*.csv);;All Files (*.*)",
+            "All Supported Files (*.xdf *.csv *.edf *.bdf *.csl.json);;Session Files (*.csl.json);;Physiological Signal Files (*.xdf *.csv *.edf *.bdf);;XDF Files (*.xdf);;CSV Files (*.csv);;EDF/BDF Files (*.edf *.bdf);;All Files (*.*)",
         )
 
         if not file_path:
@@ -1162,7 +1162,7 @@ class MainWindow(QMainWindow):
                         self,
                         "Locate Source File",
                         str(self._last_open_dir),
-                        "Data Files (*.xdf *.csv *.mat);;All Files (*.*)",
+                        "Data Files (*.xdf *.csv *.mat *.edf *.bdf);;All Files (*.*)",
                     )
                     if not located:
                         return
@@ -1311,7 +1311,7 @@ class MainWindow(QMainWindow):
             self,
             "Append Continuation File",
             str(self._last_open_dir),
-            "Physiological Signal Files (*.xdf *.csv);;XDF Files (*.xdf);;CSV Files (*.csv);;All Files (*.*)",
+            "Physiological Signal Files (*.xdf *.csv *.edf *.bdf);;XDF Files (*.xdf);;CSV Files (*.csv);;EDF/BDF Files (*.edf *.bdf);;All Files (*.*)",
         )
         if not file_path:
             return

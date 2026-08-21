@@ -1,6 +1,7 @@
 """File loading with Protocol-based architecture for extensibility.
 
-Supports XDF and CSV files with automatic signal type detection.
+Supports XDF, CSV, MATLAB .mat, and EDF/EDF+/BDF files with automatic signal
+type detection.
 """
 from __future__ import annotations
 
@@ -1909,6 +1910,196 @@ class MatLoader:
         return True
 
 
+class EdfLoader:
+    """Loader for EDF/EDF+ and BDF (Biosemi 24-bit) files via edfio.
+
+    Loads physiological signals with per-channel sampling rates and automatic
+    signal type detection from channel labels.  EDF+ annotations are mapped to
+    EventData.  Timestamps are generated uniformly from each channel's sample
+    count and sampling frequency, so every channel is zero-referenced to the
+    recording start and shares a common time axis.
+
+    EDF/EDF+ files are typically polysomnographic recordings with many
+    non-cardiac channels (EEG, EOG, EMG, respiration, SpO2, ...).  By default
+    only channels whose label maps to a recognized physiological signal type
+    (ECG, PPG, EDA) are kept; everything else is skipped and reported in
+    ``filtered_channels``.  This deliberately drops derived interval channels
+    (e.g. "RRI", "RR", "IBI"): RR intervals are event/interval data, not a
+    continuous signal, and are recomputed from the ECG via the program's own
+    peak-detection and interval-analysis pipeline instead of being trusted from
+    an idiosyncratic channel.
+    """
+
+    def __init__(self, include_unknown: bool = False):
+        """Initialize EDF loader.
+
+        Args:
+            include_unknown: If True, also load channels whose label does not
+                map to a recognized signal type (default: False, keep only
+                ECG/PPG/EDA).
+        """
+        self.include_unknown = include_unknown
+        self.skipped_streams = []  # Track channels that failed to load (zero-rate, too short)
+        self.filtered_channels = []  # Track channels dropped by label-based filtering
+
+    def can_load(self, path: Path) -> bool:
+        """Check if file is EDF or BDF format."""
+        return path.suffix.lower() in (".edf", ".bdf")
+
+    def load(self, path: Path) -> RecordingSession:
+        """Load EDF/EDF+ or BDF file.
+
+        Args:
+            path: Path to EDF/BDF file
+
+        Returns:
+            RecordingSession with loaded signals
+
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            ValueError: If file format is invalid
+        """
+        self.skipped_streams = []
+        self.filtered_channels = []
+
+        # Layered validation: type -> exists -> format
+        if not isinstance(path, Path):
+            try:
+                path = Path(path)
+            except Exception:
+                raise TypeError(f"path must be a Path object or string, got {type(path).__name__}")
+
+        if not path.exists():
+            raise FileNotFoundError(f"EDF/BDF file not found: {path}")
+
+        if not path.is_file():
+            raise ValueError(f"Path is not a file: {path}")
+
+        if path.suffix.lower() not in (".edf", ".bdf"):
+            raise ValueError(f"Invalid file extension, expected .edf or .bdf, got {path.suffix}")
+
+        logger.info(f"Loading EDF/BDF file: {path}")
+
+        try:
+            import edfio
+        except ImportError:
+            raise ValueError("edfio not installed. Install with: pip install edfio")
+
+        # BDF files use the 24-bit Biosemi variant; branch on extension
+        try:
+            if path.suffix.lower() == ".bdf":
+                edf = edfio.read_bdf(path)
+            else:
+                edf = edfio.read_edf(path)
+        except Exception as e:
+            raise ValueError(f"Failed to load EDF/BDF file: {e}")
+
+        # Extract signals (edfio excludes EDF+ annotation channels from .signals)
+        signals = []
+        for signal in edf.signals:
+            channel_name = signal.label
+            sampling_rate = float(signal.sampling_frequency)
+
+            # Status/annotation-adjacent channels can carry a zero sampling rate
+            if sampling_rate <= 0:
+                logger.warning(f"Skipping channel '{channel_name}' (sampling rate {sampling_rate} Hz)")
+                self.skipped_streams.append(channel_name)
+                continue
+
+            # Label-based filtering: keep only recognized physiological signals
+            # by default.  EDF/EDF+ has no standard for RR-interval channels
+            # (Kemp & Olivan, 2003); derived intervals appear only in
+            # vendor-specific channels, so they are dropped here and recomputed
+            # from the ECG via the peak-detection + interval-analysis pipeline.
+            signal_type = detect_signal_type_from_name(channel_name)
+            if signal_type == SignalType.UNKNOWN and not self.include_unknown:
+                logger.info(
+                    f"Skipping channel '{channel_name}' (unrecognized signal type; "
+                    f"not ECG/PPG/EDA). Derived interval channels such as RRI are "
+                    f"recomputed from the ECG signal."
+                )
+                self.filtered_channels.append(channel_name)
+                continue
+
+            # Copy: edfio may return read-only/lazily-loaded arrays; SignalData owns writable data
+            samples = np.array(signal.data, dtype=np.float64)
+
+            if len(samples) < 2:
+                logger.warning(f"Skipping channel '{channel_name}' (fewer than 2 samples)")
+                self.skipped_streams.append(channel_name)
+                continue
+
+            if np.all(samples == 0) or np.all(np.isnan(samples)):
+                logger.debug(f"Skipping empty channel: {channel_name}")
+                continue
+
+            # Uniform timestamps zero-referenced to recording start
+            timestamps = np.arange(len(samples), dtype=np.float64) / sampling_rate
+
+            if sampling_rate < 16 or sampling_rate > 2000:
+                logger.warning(
+                    f"Unusual sampling rate for '{channel_name}': {sampling_rate} Hz "
+                    f"(expected 16-2000 Hz for physiological signals)"
+                )
+
+            signals.append(
+                SignalData(
+                    samples=samples,
+                    sampling_rate=sampling_rate,
+                    timestamps=timestamps,
+                    channel_name=channel_name,
+                    signal_type=signal_type,
+                    unit=getattr(signal, "physical_dimension", "") or "",
+                )
+            )
+
+        if not signals:
+            raise ValueError(f"No physiological signals found in EDF/BDF file: {path}")
+
+        if self.filtered_channels:
+            logger.info(
+                f"Filtered out {len(self.filtered_channels)} unrecognized channel(s): "
+                f"{self.filtered_channels}"
+            )
+
+        logger.info(f"Loaded {len(signals)} signals from EDF/BDF file")
+
+        # EDF+ annotations -> events (onsets are already relative to recording start)
+        events = self._extract_annotations(edf)
+
+        return RecordingSession(source_path=path, signals=signals, events=events)
+
+    def _extract_annotations(self, edf) -> list[EventData]:
+        """Extract EDF+ annotations as EventData.
+
+        Args:
+            edf: edfio Edf (or Bdf) object
+
+        Returns:
+            List of EventData objects
+        """
+        events = []
+        try:
+            annotations = edf.annotations
+        except Exception as e:
+            logger.warning(f"Failed to read EDF annotations: {e}")
+            return events
+
+        for ann in annotations:
+            duration = float(ann.duration) if ann.duration is not None and ann.duration > 0 else None
+            events.append(
+                EventData(
+                    timestamp=float(ann.onset),
+                    label=str(ann.text),
+                    duration=duration,
+                )
+            )
+
+        if events:
+            logger.info(f"Loaded {len(events)} annotations from EDF/BDF file")
+        return events
+
+
 def get_loader(path: Path) -> FileLoader:
     """Get appropriate file loader for the given path.
 
@@ -1928,7 +2119,7 @@ def get_loader(path: Path) -> FileLoader:
     path = Path(path)
 
     # Try each loader (order matters - try specific formats before generic ones)
-    loaders = [XdfLoader(), MatLoader(), CsvLoader()]
+    loaders = [XdfLoader(), MatLoader(), EdfLoader(), CsvLoader()]
 
     for loader in loaders:
         if loader.can_load(path):
