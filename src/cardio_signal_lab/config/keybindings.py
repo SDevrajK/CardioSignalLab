@@ -10,7 +10,7 @@ KEYBINDINGS = {
     # File operations
     "file_open": QKeySequence.StandardKey.Open,  # Ctrl+O
     "file_save": QKeySequence.StandardKey.Save,  # Ctrl+S
-    "file_export": QKeySequence(Qt.Key.Key_Control | Qt.Key.Key_E),  # Ctrl+E
+    "file_export": QKeySequence("Ctrl+E"),  # Ctrl+E
     "file_quit": QKeySequence.StandardKey.Quit,  # Ctrl+Q
 
     # Edit operations (peak correction)
@@ -25,7 +25,7 @@ KEYBINDINGS = {
     "view_reset": QKeySequence(Qt.Key.Key_R),  # R
     "view_fit": QKeySequence(Qt.Key.Key_F),  # F
     "view_multi_signal": QKeySequence(Qt.Key.Key_Escape),  # ESC
-    "view_jump_to_time": QKeySequence(Qt.Key.Key_Control | Qt.Key.Key_T),  # Ctrl+T
+    "view_jump_to_time": QKeySequence("Ctrl+T"),  # Ctrl+T
     "view_pan_mode": QKeySequence(Qt.Key.Key_P),  # P
     "view_zoom_mode": QKeySequence(Qt.Key.Key_Z),  # Z
 
@@ -36,8 +36,8 @@ KEYBINDINGS = {
     "peak_last": QKeySequence(Qt.Key.Key_End),  # End
 
     # Signal navigation
-    "signal_pan_left": QKeySequence(Qt.Key.Key_Shift | Qt.Key.Key_Left),  # Shift+Left
-    "signal_pan_right": QKeySequence(Qt.Key.Key_Shift | Qt.Key.Key_Right),  # Shift+Right
+    "signal_pan_left": QKeySequence("Shift+Left"),  # Shift+Left
+    "signal_pan_right": QKeySequence("Shift+Right"),  # Shift+Right
     "signal_page_forward": QKeySequence(Qt.Key.Key_PageDown),  # Page Down
     "signal_page_backward": QKeySequence(Qt.Key.Key_PageUp),  # Page Up
 
@@ -179,7 +179,7 @@ def get_shortcut_text(action: str) -> str:
         Ctrl+S
     """
     seq = get_keysequence(action)
-    return seq.toString(QKeySequence.SequenceFormat.NativeText) if seq else ""
+    return seq.toString(QKeySequence.SequenceFormat.PortableText) if seq else ""
 
 
 def get_help_text() -> str:
