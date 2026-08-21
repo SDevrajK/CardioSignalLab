@@ -3,7 +3,7 @@
 ; then compile this with: ISCC.exe installer.iss
 
 #define MyAppName "CardioSignalLab"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "HebertLab"
 #define MyAppExeName "CardioSignalLab.exe"
 

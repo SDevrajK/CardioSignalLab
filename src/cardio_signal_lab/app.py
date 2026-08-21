@@ -7,6 +7,8 @@ import sys
 from loguru import logger
 from PySide6.QtWidgets import QApplication
 
+from cardio_signal_lab import __version__
+
 
 def main() -> None:
     """Launch the CardioSignalLab application."""
@@ -33,7 +35,7 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("CardioSignalLab")
     app.setOrganizationName("HebertLab")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion(__version__)
 
     from cardio_signal_lab.gui.main_window import MainWindow
 

@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from loguru import logger
 
-from cardio_signal_lab.config import get_config, get_config_manager, get_keysequence
+from cardio_signal_lab import __version__
+from cardio_signal_lab.config import get_config, get_config_manager, get_help_text, get_keysequence
 from cardio_signal_lab.core import (
     BadSegment,
     get_loader,
@@ -3782,6 +3783,17 @@ class MainWindow(QMainWindow):
 
     def _on_help_shortcuts(self):
         logger.info("Help > Keyboard Shortcuts triggered")
+        QMessageBox.information(self, "Keyboard Shortcuts", get_help_text())
 
     def _on_help_about(self):
         logger.info("Help > About triggered")
+        QMessageBox.about(
+            self,
+            "About CardioSignalLab",
+            (
+                "<h3>CardioSignalLab</h3>"
+                f"<p>Version {__version__}</p>"
+                "<p>Viewing, processing, and correcting physiological "
+                "signals (ECG, PPG, EDA).</p>"
+            ),
+        )

@@ -9,6 +9,8 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 from loguru import logger
 
+from cardio_signal_lab import __version__
+
 
 def _user_log_dir() -> Path:
     """Per-user writable directory for log files (install dir may be read-only)."""
@@ -49,7 +51,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("CardioSignalLab")
     app.setOrganizationName("HebertLab")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion(__version__)
 
     # Import main window here to ensure QApplication exists first
     from cardio_signal_lab.gui.main_window import MainWindow
